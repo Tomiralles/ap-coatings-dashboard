@@ -1,0 +1,55 @@
+2026-02-11T17:22:31.726Z [console][warn] [Fast Refresh] rebuilding
+2026-02-11T17:22:31.758Z [console][warn] [Fast Refresh] done in 135ms
+2026-02-11T17:18:24.685Z [console][log] [Fast Refresh] rebuilding
+2026-02-11T17:18:24.702Z [console][log] [Fast Refresh] done in 125ms
+2026-02-11T17:22:07.958Z [console][log] [Fast Refresh] rebuilding
+2026-02-11T17:22:08.020Z [console][log] [Fast Refresh] done in 171ms
+2026-02-11T17:22:08.089Z [console][log] [Fast Refresh] rebuilding
+2026-02-11T17:22:08.100Z [console][log] [Fast Refresh] done in 25ms
+2026-02-11T17:22:08.316Z [console][log] [Fast Refresh] rebuilding
+2026-02-11T17:22:08.364Z [console][log] [Fast Refresh] done in 152ms
+2026-02-11T17:22:08.411Z [console][log] [Fast Refresh] rebuilding
+2026-02-11T17:22:08.579Z [console][log] [Fast Refresh] done in 14ms
+2026-02-11T17:22:08.898Z [console][debug] __ORCHIDS_NAVIGATE__ http://localhost:3000/dashboard
+2026-02-11T17:22:31.726Z [console][log] [Fast Refresh] rebuilding
+2026-02-11T17:22:31.758Z [console][log] [Fast Refresh] done in 135ms
+2026-02-11T17:17:52.348Z [network][GET 500] /api/sheets
+  response: {"error":"GOOGLE_SHEETS_API_KEY no configurada"}
+2026-02-11T17:22:08.600Z [network][GET 200] 
+  response: 2:I["[project]/orchids-projects/lime-tarantula/node_modules/next/dist/next-devtools/userspace/app/segment-explorer-node.js [app-client] (ecmascript)",["/_next/static/chunks/6f9cc_next_dist_f95d0eea._.js","/_next/static/chunks/orchids-projects_lime-tarantula_src_app_favicon_ico_mjs_28a1a568._.js"],"SegmentViewNode"]
+4:"$Sreact.fragment"
+15:I["[project]/orchids-projects/lime-tarantula/node_modules/next/dist/client/components/layout-router.js [app-client] (ecmascript)",["/_next/static/chunks/6f9cc_next_dist_f95d0eea._.js","/_next/static/chunks/orchids-projects_lime-tarantula_src_app_favicon_ico_mjs_28a1a568._.js"],"default"]
+17:I["[project]/orchids-projects/lime-tarantula/node_modules/next/dist/client/components/render-from-template-context.js [app-client] (ecmascript)",["/_next/static/chunks/6f9cc_next_dist_f95d0eea._.js","/_next/static/chunks/orchids-projects_lime-tarantula_src_app_favicon_ico_mjs_28a1a568._.js"],"default"]
+26:I["[project]/orchids-projects/lime-tarantula/node_modules/orchids-visual-edits/dist/index.js [app-client] (ecmascript)",["/_next/static/chunks/6f9cc_orchids-visual-edits_dist_787fdf80._.js","/_next/static/chunks/orchids-projects_lime-tarantula_src_app_layout_tsx_95d18756._.js"],"VisualEditsMessenger"]
+2d:I["[project]/orchids-projects/lime-tarantula/node_modules/next/dist/client/components/client-page.js [app-client] (ecmascript)",["/_next/static/chunks/6f9cc_next_dist_f95d0eea._.js","/_next/static/chunks/orchids-projects_lime-tarantula_src_app_favicon_ico_mjs_28a1a568._.js"],"ClientPageRoot"]
+2e:I["[project]/orchids-projects/lime-tarantula/src/app/dashboard/page.tsx [app-client] (ecmascript)",["/_next/static/chunks/6f9cc_orchids-visual-edits_dist_787fdf80._.js","/_next/static/chunks/orchids-projects_lime-tarantula_src_app_layout_tsx_95d18756._.js","/_next/static/chunks/orchids-projects_lime-tarantula_src_144d556b._.js","/_next/static/chunks/6f9cc_tailwind-merge_dist_bundle-mjs_mjs_5710f1d3._.js","/_next/static/chunks/6f9cc_lodash_e435157d._.js"... [truncated]
+2026-02-11T17:22:08.896Z [network][GET 200] 
+  response: 2:I["[project]/orchids-projects/lime-tarantula/node_modules/next/dist/next-devtools/userspace/app/segment-explorer-node.js [app-client] (ecmascript)",["/_next/static/chunks/6f9cc_next_dist_f95d0eea._.js","/_next/static/chunks/orchids-projects_lime-tarantula_src_app_favicon_ico_mjs_28a1a568._.js"],"SegmentViewNode"]
+4:"$Sreact.fragment"
+15:I["[project]/orchids-projects/lime-tarantula/node_modules/next/dist/client/components/layout-router.js [app-client] (ecmascript)",["/_next/static/chunks/6f9cc_next_dist_f95d0eea._.js","/_next/static/chunks/orchids-projects_lime-tarantula_src_app_favicon_ico_mjs_28a1a568._.js"],"default"]
+17:I["[project]/orchids-projects/lime-tarantula/node_modules/next/dist/client/components/render-from-template-context.js [app-client] (ecmascript)",["/_next/static/chunks/6f9cc_next_dist_f95d0eea._.js","/_next/static/chunks/orchids-projects_lime-tarantula_src_app_favicon_ico_mjs_28a1a568._.js"],"default"]
+26:I["[project]/orchids-projects/lime-tarantula/node_modules/orchids-visual-edits/dist/index.js [app-client] (ecmascript)",["/_next/static/chunks/6f9cc_orchids-visual-edits_dist_787fdf80._.js","/_next/static/chunks/orchids-projects_lime-tarantula_src_app_layout_tsx_95d18756._.js"],"VisualEditsMessenger"]
+2d:I["[project]/orchids-projects/lime-tarantula/node_modules/next/dist/client/components/client-page.js [app-client] (ecmascript)",["/_next/static/chunks/6f9cc_next_dist_f95d0eea._.js","/_next/static/chunks/orchids-projects_lime-tarantula_src_app_favicon_ico_mjs_28a1a568._.js"],"ClientPageRoot"]
+2e:I["[project]/orchids-projects/lime-tarantula/src/app/dashboard/page.tsx [app-client] (ecmascript)",["/_next/static/chunks/6f9cc_orchids-visual-edits_dist_787fdf80._.js","/_next/static/chunks/orchids-projects_lime-tarantula_src_app_layout_tsx_95d18756._.js","/_next/static/chunks/orchids-projects_lime-tarantula_src_144d556b._.js","/_next/static/chunks/6f9cc_tailwind-merge_dist_bundle-mjs_mjs_5710f1d3._.js","/_next/static/chunks/6f9cc_lodash_e435157d._.js"... [truncated]
+2026-02-11T17:30:15.787Z [console][warn] [Fast Refresh] rebuilding
+2026-02-11T17:30:15.854Z [console][warn] [Fast Refresh] done in 176ms
+2026-02-11T17:31:57.577Z [console][warn] [Fast Refresh] rebuilding
+2026-02-11T17:31:57.672Z [console][warn] [Fast Refresh] done in 210ms
+2026-02-11T17:31:57.891Z [console][warn] [Fast Refresh] rebuilding
+2026-02-11T17:31:57.954Z [console][warn] [Fast Refresh] done in 163ms
+2026-02-11T17:32:11.596Z [console][warn] [Fast Refresh] rebuilding
+2026-02-11T17:32:11.769Z [console][warn] [Fast Refresh] done in 280ms
+2026-02-11T17:30:15.787Z [console][log] [Fast Refresh] rebuilding
+2026-02-11T17:30:15.854Z [console][log] [Fast Refresh] done in 176ms
+2026-02-11T17:31:57.577Z [console][log] [Fast Refresh] rebuilding
+2026-02-11T17:31:57.672Z [console][log] [Fast Refresh] done in 210ms
+2026-02-11T17:31:57.891Z [console][log] [Fast Refresh] rebuilding
+2026-02-11T17:31:57.954Z [console][log] [Fast Refresh] done in 163ms
+2026-02-11T17:32:11.596Z [console][log] [Fast Refresh] rebuilding
+2026-02-11T17:32:11.769Z [console][log] [Fast Refresh] done in 280ms
+2026-02-11T17:30:16.958Z [network][GET 200] /api/sheets
+  response: {"registros":[{"fecha":"5/02/2026 15:41:28","quien":"Abad Pinturas S.l.","asunto":"RV: RV: RE: E  254677 EUROQUIMICA PAINTS, S.A.","enlace":"2026-02-11_Pedido 2026000093.pdf","cuerpo":"\r\n\r\nDe: Abad Pinturas S.l. <abadpinturas@abadpinturas.com>\r\nEnviado el: miércoles, 4 de febrero de 2026 18:47\r\nPara: administracion@apcoatings.net\r\nAsunto: RV: RE: E 254677 EUROQUIMICA PAINTS, S.A.\r\n\r\n\r\nDe: Elisabet Medina <emedina@euroquimica.com>\r\nEnviado el: lunes, 19 de enero de 2026 08:14\r\nPara: <abadpinturas@abadpinturas.com>\r\nAsunto: RE: E 254677 EUROQUIMICA PAINTS, S.A.\r\nBuenos días,\r\nAdjunto facturas solicitadas.\r\nSaludos,\r\nElisabet Medina \r\nEUROQUIMICA PAINTS S.A.\r\nDept. Administració ","estado":"FACTURA PROVEEDOR","tipo":"Factura","prioridad":"","autoDropdown":"FALSE","respuestaAuto":"NADA"},{"fecha":"5/02/2026 17:44:25","quien":"\"Abad Pinturas S.l.\" <abadpinturas@abadpinturas.com>","asunto":"pedido (prueba)","enlace":"2026-02-11_Pedido 2026000093.pdf","cuerpo":"\r\n","estado":"En Curso","tipo":"Pedido, ENVIADO","prioridad":"urgente","autoDropdown":"TRUE","respuestaAuto":"Asunto: Confirmación de recepción y procesamiento de su pedido (prueba)\n\nEstimado cliente,\n\nLe escribimos para confirmar que hemos recibido su pedido (prueba) con fecha 5/02/2026.\n\nQueremos informarle que su pedido está siendo procesado por nuestro equipo.\n\nLe agradecemos su confianza.\n\nSaludos cordiales,\n\\[Tu nombre/Nombre de la empresa\\]"},{"fecha":"6/02/2026 11:03:44","quien":"\"Abad Pinturas S.l.\" <abadpinturas@abadpinturas.com>","asunto":"RV: Pedido P1984","enlace":"2026-02-11_Pedido 2026000093.pdf","cuerpo":"\r\n\r\nDe: Compras <compras@sempere.com>\r\nEnviado el: miércoles, 4 de febrero de 2026 15:09\r\nPara: \"Toni (Abad)\" <abadpinturas@abadpinturas.com>\r\nAsunto: Pedido P1984\r\nBona vesprada,\r\n \r\nAdjunte pedido de pintura.\r\nSalutacions\r\n \r\n \r\n    \r\nVicent Quiles   \r\nPurchasing Manager & Procurement  \r\n+34 653 523 463  \r\nvicen... [truncated]
+2026-02-11T18:19:30.943Z [console][error] Uncaught ReferenceError: EstadoDropdown is not defined
+2026-02-11T18:19:42.580Z [console][error] [Fast Refresh] performing full reload because your application had an unrecoverable error
+2026-02-11T18:19:30.943Z [console][error] Uncaught ReferenceError: EstadoDropdown is not defined
+2026-02-11T18:19:42.580Z [console][error] [Fast Refresh] performing full reload because your application had an unrecoverable error
