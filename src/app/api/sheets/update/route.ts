@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { sendWhatsAppNotification } from "@/lib/whatsapp";
 
 export async function POST(request: Request) {
   const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
@@ -12,7 +13,7 @@ export async function POST(request: Request) {
 
   try {
     const body = await request.json();
-    const { fila, columna, valor } = body;
+    const { fila, columna, valor, telefono, quien, asunto } = body;
 
     if (!fila || !columna || valor === undefined) {
       return NextResponse.json(
@@ -20,6 +21,18 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+
+    // Si el estado cambia a 'Enviado' y tenemos telefono, disparamos WhatsApp
+    /* Comentado temporalmente por restricciones en Meta
+    if (columna === 6 && valor === "Enviado" && telefono) {
+      console.log("Enviando WhatsApp a:", telefono);
+      const waRes = await sendWhatsAppNotification(telefono, quien, asunto);
+      if (!waRes.ok) {
+        console.error("Fallo envio de WhatsApp:", waRes.error);
+        // Continuamos de todas formas para que la celda se guarde en Sheets
+      }
+    }
+    */
 
     const res = await fetch(scriptUrl, {
       method: "POST",

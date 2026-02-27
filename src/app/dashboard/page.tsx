@@ -13,6 +13,7 @@ import {
   Search,
   ExternalLink,
   Filter,
+  MessageCircle,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -58,6 +59,7 @@ interface Registro {
   prioridad: string;
   autoDropdown: string;
   respuestaAuto: string;
+  telefono: string;
 }
 
 function limpiarNombre(raw: string): string {
@@ -90,6 +92,28 @@ function formatFecha(fecha: string): string {
   });
 }
 
+function getWhatsAppLink(telefono: string, nombre: string, asunto: string, tipo: string, estado: string) {
+  if (!telefono) return "#";
+  const cleanPhone = telefono.replace(/\D/g, "");
+  if (!cleanPhone) return "#";
+  
+  const msgNombre = limpiarNombre(nombre).split(" ")[0]; // Solo el primer nombre
+  const cleanAsunto = asunto.replace(/^"+|"+$/g, "").trim();
+  const esEnvio = estado.toLowerCase().includes("enviado");
+  const esFactura = tipo.toLowerCase().includes("factura") || estado.toLowerCase().includes("factura");
+  
+  let mensaje = "";
+  if (esEnvio) {
+    mensaje = `Hola ${msgNombre}, le informamos desde *Abad Pinturas* que su pedido "${cleanAsunto}" ya ha sido enviado. ¡Gracias por confiar en nosotros! 🚚`;
+  } else if (esFactura) {
+    mensaje = `Hola ${msgNombre}, le informamos desde *Abad Pinturas* que su factura "${cleanAsunto}" ya está disponible para su gestión. Atentamente.`;
+  } else {
+    mensaje = `Hola ${msgNombre}, le contactamos desde *Abad Pinturas* en relación a su gestión de "${cleanAsunto}". ¿Podríamos hablar?`;
+  }
+  
+  return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(mensaje)}`;
+}
+
 const TIPO_CONFIG: Record<string, { color: string; icon: React.ReactNode }> = {
   "Pedido": { color: "bg-orange-100 text-orange-700 border-orange-200", icon: <Package className="h-3 w-3" /> },
   "Factura": { color: "bg-violet-100 text-violet-700 border-violet-200", icon: <FileText className="h-3 w-3" /> },
@@ -113,14 +137,22 @@ export default function DashboardPage() {
     columna: number,
     valor: string
   ) => {
-    const fila = rowIndex + 2; // +2 porque fila 1 es header, y rowIndex empieza en 0
+    const registroActual = registros[rowIndex];
+    const fila = rowIndex + 2;
     const key = `${fila}-${columna}`;
     setSaving(key);
     try {
       const res = await fetch("/api/sheets/update", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fila, columna, valor }),
+        body: JSON.stringify({
+          fila,
+          columna,
+          valor,
+          telefono: registroActual.telefono,
+          quien: registroActual.quien,
+          asunto: registroActual.asunto,
+        }),
       });
       const data = await res.json();
       if (data.ok) {
@@ -129,6 +161,7 @@ export default function DashboardPage() {
             if (i !== rowIndex) return r;
             if (columna === 6) return { ...r, estado: valor };
             if (columna === 8) return { ...r, prioridad: valor };
+            if (columna === 11) return { ...r, telefono: valor };
             return r;
           })
         );
@@ -386,9 +419,10 @@ export default function DashboardPage() {
                       <TableHeader>
                         <TableRow className="bg-gray-50/50">
                           <TableHead className="w-[100px]">Fecha</TableHead>
-                          <TableHead className="w-[180px]">Remitente</TableHead>
-                          <TableHead>Asunto</TableHead>
-                          <TableHead className="w-[120px]">Estado</TableHead>
+                              <TableHead className="w-[180px]">Remitente</TableHead>
+                              <TableHead>Asunto</TableHead>
+                              <TableHead className="w-[160px]">Contacto / WA</TableHead>
+                              <TableHead className="w-[120px]">Estado</TableHead>
                           <TableHead className="w-[100px]">Tipo</TableHead>
                           <TableHead className="w-[100px]">Prioridad</TableHead>
                           <TableHead className="w-[60px]">Docs</TableHead>
@@ -409,10 +443,11 @@ export default function DashboardPage() {
                               const enlaces = r.enlace
                                 ? r.enlace.split(",").map((e) => e.trim()).filter(Boolean)
                                 : [];
-                              const savingEstado = saving === `${r._idx + 2}-6`;
-                              const savingPrioridad = saving === `${r._idx + 2}-8`;
+                                const savingEstado = saving === `${r._idx + 2}-6`;
+                                const savingPrioridad = saving === `${r._idx + 2}-8`;
+                                const savingTelefono = saving === `${r._idx + 2}-11`;
 
-                              return (
+                                return (
                                 <TableRow key={i} className="hover:bg-orange-50/30">
                                   <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                                     {formatFecha(r.fecha)}
@@ -420,10 +455,58 @@ export default function DashboardPage() {
                                   <TableCell className="font-medium text-sm max-w-[180px] truncate" title={r.quien}>
                                     {limpiarNombre(r.quien)}
                                   </TableCell>
-                                  <TableCell className="text-sm max-w-[250px] truncate" title={r.asunto}>
-                                    {r.asunto.replace(/^"+|"+$/g, "")}
-                                  </TableCell>
-                                    <TableCell>
+                                    <TableCell className="text-sm max-w-[250px] truncate" title={r.asunto}>
+                                      {r.asunto.replace(/^"+|"+$/g, "")}
+                                    </TableCell>
+                                        <TableCell>
+                                          <div className="flex items-center gap-1.5 min-w-[140px]">
+                                            <div className="relative w-full">
+                                              <input
+                                                type="text"
+                                                placeholder="Teléfono..."
+                                                value={r.telefono || ""}
+                                                disabled={savingTelefono}
+                                                onChange={(e) => {
+                                                  let val = e.target.value;
+                                                  // Only allow numbers, +, -, and spaces in state
+                                                  val = val.replace(/[^\d+ \-]/g, "");
+                                                  setRegistros(prev => prev.map((item, idx) => idx === r._idx ? { ...item, telefono: val } : item));
+                                                }}
+                                                onBlur={(e) => {
+                                                  updateCell(r._idx, 11, e.target.value);
+                                                }}
+                                                className={`w-full text-xs p-1.5 border rounded focus:ring-1 focus:ring-orange-500 outline-none pr-6 ${
+                                                  savingTelefono ? "opacity-50" : ""
+                                                } ${
+                                                  r.estado?.toLowerCase() === "enviado" && !r.telefono
+                                                    ? "border-red-300 bg-red-50"
+                                                    : "border-gray-200"
+                                                }`}
+                                              />
+                                              {savingTelefono && (
+                                                <div className="absolute right-1.5 top-1/2 -translate-y-1/2">
+                                                  <RefreshCw className="h-2.5 w-2.5 animate-spin text-gray-400" />
+                                                </div>
+                                              )}
+                                            </div>
+                                            {r.telefono && (
+                                              <a
+                                                href={getWhatsAppLink(r.telefono, r.quien, r.asunto, r.tipo, r.estado)}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className={`shrink-0 p-2 rounded-md text-white transition-all shadow-sm hover:scale-105 active:scale-95 ${
+                                                  r.estado?.toLowerCase() === "enviado"
+                                                    ? "bg-green-600 hover:bg-green-700 animate-pulse-subtle"
+                                                    : "bg-gray-400 hover:bg-gray-500"
+                                                }`}
+                                                title="Abrir WhatsApp Web"
+                                              >
+                                                <MessageCircle className="h-4 w-4" />
+                                              </a>
+                                            )}
+                                          </div>
+                                        </TableCell>
+                                      <TableCell>
                                       <EstadoDropdown
                                         tipo={r.tipo}
                                         estado={r.estado}

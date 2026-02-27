@@ -43,6 +43,7 @@ export async function GET() {
       prioridad: row[7] ?? "",
       autoDropdown: row[8] ?? "",
       respuestaAuto: row[9] ?? "",
+      telefono: row[10] ?? "",
     }));
 
     return NextResponse.json({ registros });
