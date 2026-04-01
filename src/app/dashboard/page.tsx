@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useMemo, useCallback } from "react";
+import Link from "next/link";
 import {
   Package,
   FileText,
@@ -14,6 +15,7 @@ import {
   ExternalLink,
   Filter,
   MessageCircle,
+  ShoppingCart,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -295,13 +297,22 @@ export default function DashboardPage() {
               <p className="text-xs text-muted-foreground">Panel de control - Pedidos y Facturas</p>
             </div>
           </div>
-          <button
-            onClick={fetchData}
-            className="flex items-center gap-2 px-3 py-2 text-sm rounded-md border hover:bg-gray-50 transition-colors"
-          >
-            <RefreshCw className="h-4 w-4" />
-            Actualizar
-          </button>
+          <div className="flex items-center gap-2">
+              <Link
+                href="/pedidos"
+                className="flex items-center gap-2 px-3 py-2 text-sm rounded-md bg-orange-500 text-white hover:bg-orange-600 transition-colors font-medium"
+              >
+                <ShoppingCart className="h-4 w-4" />
+                Pedidos
+              </Link>
+              <button
+                onClick={fetchData}
+                className="flex items-center gap-2 px-3 py-2 text-sm rounded-md border hover:bg-gray-50 transition-colors"
+              >
+                <RefreshCw className="h-4 w-4" />
+                Actualizar
+              </button>
+            </div>
         </div>
       </header>
 
