@@ -219,8 +219,12 @@ export default function DashboardPage() {
           filtroTipo === "todos" ||
           r.tipo.toLowerCase().includes(filtroTipo.toLowerCase());
 
+        const esFactura = r.tipo.toLowerCase().includes("factura") ||
+          r.estado.toLowerCase().includes("factura") ||
+          ["revisada", "contabilizada", "pagada"].includes(r.estado.toLowerCase());
+
         if (activeTab === "pedidos") return matchSearch && matchEstado && r.tipo.toLowerCase().includes("pedido");
-        if (activeTab === "facturas") return matchSearch && matchEstado && (r.tipo.toLowerCase().includes("factura") || r.estado.toLowerCase().includes("factura"));
+        if (activeTab === "facturas") return matchSearch && matchEstado && esFactura;
         if (activeTab === "consultas") return matchSearch && matchEstado && r.tipo.toLowerCase().includes("consulta");
         return matchSearch && matchEstado && matchTipo;
       });
@@ -228,7 +232,7 @@ export default function DashboardPage() {
 
   const stats = useMemo(() => {
     const pedidos = registros.filter((r) => r.tipo.toLowerCase().includes("pedido"));
-    const facturas = registros.filter((r) => r.tipo.toLowerCase().includes("factura") || r.estado.toLowerCase().includes("factura"));
+    const facturas = registros.filter((r) => r.tipo.toLowerCase().includes("factura") || r.estado.toLowerCase().includes("factura") || ["revisada", "contabilizada", "pagada"].includes(r.estado.toLowerCase()));
     const consultas = registros.filter((r) => r.tipo.toLowerCase().includes("consulta"));
     const urgentes = registros.filter((r) => r.prioridad.toLowerCase().includes("urgente"));
     const enCurso = registros.filter((r) => r.estado.toLowerCase().includes("en curso"));
