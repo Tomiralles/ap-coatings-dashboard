@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo, useCallback } from "react";
-import Link from "next/link";
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import {
   Package,
   FileText,
@@ -15,7 +14,8 @@ import {
   ExternalLink,
   Filter,
   MessageCircle,
-  ShoppingCart,
+  LayoutList,
+  Columns,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -64,6 +64,10 @@ interface Registro {
   telefono: string;
 }
 
+interface RegistroConIdx extends Registro {
+  _idx: number;
+}
+
 function limpiarNombre(raw: string): string {
   if (!raw) return "—";
   return raw
@@ -98,12 +102,12 @@ function getWhatsAppLink(telefono: string, nombre: string, asunto: string, tipo:
   if (!telefono) return "#";
   const cleanPhone = telefono.replace(/\D/g, "");
   if (!cleanPhone) return "#";
-  
-  const msgNombre = limpiarNombre(nombre).split(" ")[0]; // Solo el primer nombre
+
+  const msgNombre = limpiarNombre(nombre).split(" ")[0];
   const cleanAsunto = asunto.replace(/^"+|"+$/g, "").trim();
   const esEnvio = estado.toLowerCase().includes("enviado");
   const esFactura = tipo.toLowerCase().includes("factura") || estado.toLowerCase().includes("factura");
-  
+
   let mensaje = "";
   if (esEnvio) {
     mensaje = `Hola ${msgNombre}, le informamos desde *Abad Pinturas* que su pedido "${cleanAsunto}" ya ha sido enviado. ¡Gracias por confiar en nosotros! 🚚`;
@@ -112,7 +116,7 @@ function getWhatsAppLink(telefono: string, nombre: string, asunto: string, tipo:
   } else {
     mensaje = `Hola ${msgNombre}, le contactamos desde *Abad Pinturas* en relación a su gestión de "${cleanAsunto}". ¿Podríamos hablar?`;
   }
-  
+
   return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(mensaje)}`;
 }
 
@@ -133,6 +137,7 @@ export default function DashboardPage() {
   const [filtroTipo, setFiltroTipo] = useState("todos");
   const [activeTab, setActiveTab] = useState("todo");
   const [saving, setSaving] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<"table" | "kanban">("table");
 
   const updateCell = useCallback(async (
     rowIndex: number,
@@ -175,7 +180,7 @@ export default function DashboardPage() {
     } finally {
       setSaving(null);
     }
-  }, []);
+  }, [registros]);
 
   const fetchData = async () => {
     setLoading(true);
@@ -221,7 +226,6 @@ export default function DashboardPage() {
       });
   }, [registros, search, filtroEstado, filtroTipo, activeTab]);
 
-  // KPIs
   const stats = useMemo(() => {
     const pedidos = registros.filter((r) => r.tipo.toLowerCase().includes("pedido"));
     const facturas = registros.filter((r) => r.tipo.toLowerCase().includes("factura") || r.estado.toLowerCase().includes("factura"));
@@ -233,7 +237,6 @@ export default function DashboardPage() {
     return { pedidos, facturas, consultas, urgentes, enCurso, enviados };
   }, [registros]);
 
-  // Chart data
   const tipoChartData = useMemo(() => {
     const counts: Record<string, number> = {};
     registros.forEach((r) => {
@@ -298,21 +301,41 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-              <Link
-                href="/pedidos"
-                className="flex items-center gap-2 px-3 py-2 text-sm rounded-md bg-orange-500 text-white hover:bg-orange-600 transition-colors font-medium"
-              >
-                <ShoppingCart className="h-4 w-4" />
-                Pedidos
-              </Link>
+            {/* View mode toggle */}
+            <div className="flex items-center rounded-md border overflow-hidden">
               <button
-                onClick={fetchData}
-                className="flex items-center gap-2 px-3 py-2 text-sm rounded-md border hover:bg-gray-50 transition-colors"
+                onClick={() => setViewMode("table")}
+                className={`flex items-center gap-1.5 px-3 py-2 text-sm transition-colors ${
+                  viewMode === "table"
+                    ? "bg-orange-500 text-white"
+                    : "hover:bg-gray-50 text-gray-600"
+                }`}
+                title="Vista tabla"
               >
-                <RefreshCw className="h-4 w-4" />
-                Actualizar
+                <LayoutList className="h-4 w-4" />
+                <span className="hidden sm:inline">Tabla</span>
+              </button>
+              <button
+                onClick={() => setViewMode("kanban")}
+                className={`flex items-center gap-1.5 px-3 py-2 text-sm transition-colors ${
+                  viewMode === "kanban"
+                    ? "bg-orange-500 text-white"
+                    : "hover:bg-gray-50 text-gray-600"
+                }`}
+                title="Vista Kanban"
+              >
+                <Columns className="h-4 w-4" />
+                <span className="hidden sm:inline">Kanban</span>
               </button>
             </div>
+            <button
+              onClick={fetchData}
+              className="flex items-center gap-2 px-3 py-2 text-sm rounded-md border hover:bg-gray-50 transition-colors"
+            >
+              <RefreshCw className="h-4 w-4" />
+              Actualizar
+            </button>
+          </div>
         </div>
       </header>
 
@@ -369,7 +392,7 @@ export default function DashboardPage() {
           </Card>
         </div>
 
-        {/* Filters + Table */}
+        {/* Filters + Table/Kanban */}
         <Card>
           <CardHeader className="pb-3">
             <div className="flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
@@ -424,22 +447,23 @@ export default function DashboardPage() {
 
             {["todo", "pedidos", "facturas", "consultas"].map((tab) => (
               <TabsContent key={tab} value={tab} className="mt-0">
-                <CardContent className="p-0">
-                  <div className="overflow-x-auto">
-                    <Table>
-                      <TableHeader>
-                        <TableRow className="bg-gray-50/50">
-                          <TableHead className="w-[100px]">Fecha</TableHead>
-                              <TableHead className="w-[180px]">Remitente</TableHead>
-                              <TableHead>Asunto</TableHead>
-                              <TableHead className="w-[160px]">Contacto / WA</TableHead>
-                              <TableHead className="w-[120px]">Estado</TableHead>
-                          <TableHead className="w-[100px]">Tipo</TableHead>
-                          <TableHead className="w-[100px]">Prioridad</TableHead>
-                          <TableHead className="w-[60px]">Docs</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
+                {viewMode === "table" ? (
+                  <CardContent className="p-0">
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="bg-gray-50/50">
+                            <TableHead className="w-[100px]">Fecha</TableHead>
+                            <TableHead className="w-[180px]">Remitente</TableHead>
+                            <TableHead>Asunto</TableHead>
+                            <TableHead className="w-[160px]">Contacto / WA</TableHead>
+                            <TableHead className="w-[120px]">Estado</TableHead>
+                            <TableHead className="w-[100px]">Tipo</TableHead>
+                            <TableHead className="w-[100px]">Prioridad</TableHead>
+                            <TableHead className="w-[60px]">Docs</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
                           {filtrados.length === 0 ? (
                             <TableRow>
                               <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
@@ -454,11 +478,11 @@ export default function DashboardPage() {
                               const enlaces = r.enlace
                                 ? r.enlace.split(",").map((e) => e.trim()).filter(Boolean)
                                 : [];
-                                const savingEstado = saving === `${r._idx + 2}-6`;
-                                const savingPrioridad = saving === `${r._idx + 2}-8`;
-                                const savingTelefono = saving === `${r._idx + 2}-11`;
+                              const savingEstado = saving === `${r._idx + 2}-6`;
+                              const savingPrioridad = saving === `${r._idx + 2}-8`;
+                              const savingTelefono = saving === `${r._idx + 2}-11`;
 
-                                return (
+                              return (
                                 <TableRow key={i} className="hover:bg-orange-50/30">
                                   <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                                     {formatFecha(r.fecha)}
@@ -466,65 +490,64 @@ export default function DashboardPage() {
                                   <TableCell className="font-medium text-sm max-w-[180px] truncate" title={r.quien}>
                                     {limpiarNombre(r.quien)}
                                   </TableCell>
-                                    <TableCell className="text-sm max-w-[250px] truncate" title={r.asunto}>
-                                      {r.asunto.replace(/^"+|"+$/g, "")}
-                                    </TableCell>
-                                        <TableCell>
-                                          <div className="flex items-center gap-1.5 min-w-[140px]">
-                                            <div className="relative w-full">
-                                              <input
-                                                type="text"
-                                                placeholder="Teléfono..."
-                                                value={r.telefono || ""}
-                                                disabled={savingTelefono}
-                                                onChange={(e) => {
-                                                  let val = e.target.value;
-                                                  // Only allow numbers, +, -, and spaces in state
-                                                  val = val.replace(/[^\d+ \-]/g, "");
-                                                  setRegistros(prev => prev.map((item, idx) => idx === r._idx ? { ...item, telefono: val } : item));
-                                                }}
-                                                onBlur={(e) => {
-                                                  updateCell(r._idx, 11, e.target.value);
-                                                }}
-                                                className={`w-full text-xs p-1.5 border rounded focus:ring-1 focus:ring-orange-500 outline-none pr-6 ${
-                                                  savingTelefono ? "opacity-50" : ""
-                                                } ${
-                                                  r.estado?.toLowerCase() === "enviado" && !r.telefono
-                                                    ? "border-red-300 bg-red-50"
-                                                    : "border-gray-200"
-                                                }`}
-                                              />
-                                              {savingTelefono && (
-                                                <div className="absolute right-1.5 top-1/2 -translate-y-1/2">
-                                                  <RefreshCw className="h-2.5 w-2.5 animate-spin text-gray-400" />
-                                                </div>
-                                              )}
-                                            </div>
-                                            {r.telefono && (
-                                              <a
-                                                href={getWhatsAppLink(r.telefono, r.quien, r.asunto, r.tipo, r.estado)}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className={`shrink-0 p-2 rounded-md text-white transition-all shadow-sm hover:scale-105 active:scale-95 ${
-                                                  r.estado?.toLowerCase() === "enviado"
-                                                    ? "bg-green-600 hover:bg-green-700 animate-pulse-subtle"
-                                                    : "bg-gray-400 hover:bg-gray-500"
-                                                }`}
-                                                title="Abrir WhatsApp Web"
-                                              >
-                                                <MessageCircle className="h-4 w-4" />
-                                              </a>
-                                            )}
+                                  <TableCell className="text-sm max-w-[250px] truncate" title={r.asunto}>
+                                    {r.asunto.replace(/^"+|"+$/g, "")}
+                                  </TableCell>
+                                  <TableCell>
+                                    <div className="flex items-center gap-1.5 min-w-[140px]">
+                                      <div className="relative w-full">
+                                        <input
+                                          type="text"
+                                          placeholder="Teléfono..."
+                                          value={r.telefono || ""}
+                                          disabled={savingTelefono}
+                                          onChange={(e) => {
+                                            let val = e.target.value;
+                                            val = val.replace(/[^\d+ \-]/g, "");
+                                            setRegistros(prev => prev.map((item, idx) => idx === r._idx ? { ...item, telefono: val } : item));
+                                          }}
+                                          onBlur={(e) => {
+                                            updateCell(r._idx, 11, e.target.value);
+                                          }}
+                                          className={`w-full text-xs p-1.5 border rounded focus:ring-1 focus:ring-orange-500 outline-none pr-6 ${
+                                            savingTelefono ? "opacity-50" : ""
+                                          } ${
+                                            r.estado?.toLowerCase() === "enviado" && !r.telefono
+                                              ? "border-red-300 bg-red-50"
+                                              : "border-gray-200"
+                                          }`}
+                                        />
+                                        {savingTelefono && (
+                                          <div className="absolute right-1.5 top-1/2 -translate-y-1/2">
+                                            <RefreshCw className="h-2.5 w-2.5 animate-spin text-gray-400" />
                                           </div>
-                                        </TableCell>
-                                      <TableCell>
-                                      <EstadoDropdown
-                                        tipo={r.tipo}
-                                        estado={r.estado}
-                                        saving={savingEstado}
-                                        onChange={(val) => updateCell(r._idx, 6, val)}
-                                      />
-                                    </TableCell>
+                                        )}
+                                      </div>
+                                      {r.telefono && (
+                                        <a
+                                          href={getWhatsAppLink(r.telefono, r.quien, r.asunto, r.tipo, r.estado)}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className={`shrink-0 p-2 rounded-md text-white transition-all shadow-sm hover:scale-105 active:scale-95 ${
+                                            r.estado?.toLowerCase() === "enviado"
+                                              ? "bg-green-600 hover:bg-green-700"
+                                              : "bg-gray-400 hover:bg-gray-500"
+                                          }`}
+                                          title="Abrir WhatsApp Web"
+                                        >
+                                          <MessageCircle className="h-4 w-4" />
+                                        </a>
+                                      )}
+                                    </div>
+                                  </TableCell>
+                                  <TableCell>
+                                    <EstadoDropdown
+                                      tipo={r.tipo}
+                                      estado={r.estado}
+                                      saving={savingEstado}
+                                      onChange={(val) => updateCell(r._idx, 6, val)}
+                                    />
+                                  </TableCell>
                                   <TableCell>
                                     {tipoCfg ? (
                                       <Badge variant="outline" className={`${tipoCfg.color} gap-1 text-xs font-normal`}>
@@ -573,11 +596,22 @@ export default function DashboardPage() {
                                 </TableRow>
                               );
                             })
-                        )}
-                      </TableBody>
-                    </Table>
-                  </div>
-                </CardContent>
+                          )}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </CardContent>
+                ) : (
+                  <CardContent className="p-4">
+                    <KanbanBoard
+                      filtrados={filtrados}
+                      activeTab={activeTab}
+                      updateCell={updateCell}
+                      saving={saving}
+                      setRegistros={setRegistros}
+                    />
+                  </CardContent>
+                )}
               </TabsContent>
             ))}
           </Tabs>
@@ -586,6 +620,239 @@ export default function DashboardPage() {
     </div>
   );
 }
+
+// ─── Kanban ───────────────────────────────────────────────────────────────────
+
+const KANBAN_COLUMNS: Record<string, { label: string; estados: string[]; color: string; headerColor: string }[]> = {
+  todo: [
+    { label: "Pendiente", estados: ["PENDIENTE (Pedido)", "PENDIENTE (Factura)", "PENDIENTE (Consulta)"], color: "bg-yellow-50 border-yellow-200", headerColor: "bg-yellow-100 text-yellow-800" },
+    { label: "En Proceso", estados: ["En Curso", "Revisada"], color: "bg-blue-50 border-blue-200", headerColor: "bg-blue-100 text-blue-800" },
+    { label: "Completado", estados: ["Enviado", "Contabilizada", "Pagada", "Respondida"], color: "bg-green-50 border-green-200", headerColor: "bg-green-100 text-green-800" },
+  ],
+  pedidos: [
+    { label: "Pendiente", estados: ["PENDIENTE (Pedido)"], color: "bg-yellow-50 border-yellow-200", headerColor: "bg-yellow-100 text-yellow-800" },
+    { label: "En Curso", estados: ["En Curso"], color: "bg-blue-50 border-blue-200", headerColor: "bg-blue-100 text-blue-800" },
+    { label: "Enviado", estados: ["Enviado"], color: "bg-green-50 border-green-200", headerColor: "bg-green-100 text-green-800" },
+  ],
+  facturas: [
+    { label: "Pendiente", estados: ["PENDIENTE (Factura)"], color: "bg-yellow-50 border-yellow-200", headerColor: "bg-yellow-100 text-yellow-800" },
+    { label: "Revisada", estados: ["Revisada"], color: "bg-blue-50 border-blue-200", headerColor: "bg-blue-100 text-blue-800" },
+    { label: "Contabilizada", estados: ["Contabilizada"], color: "bg-purple-50 border-purple-200", headerColor: "bg-purple-100 text-purple-800" },
+    { label: "Pagada", estados: ["Pagada"], color: "bg-green-50 border-green-200", headerColor: "bg-green-100 text-green-800" },
+  ],
+  consultas: [
+    { label: "Pendiente", estados: ["PENDIENTE (Consulta)"], color: "bg-yellow-50 border-yellow-200", headerColor: "bg-yellow-100 text-yellow-800" },
+    { label: "Respondida", estados: ["Respondida"], color: "bg-green-50 border-green-200", headerColor: "bg-green-100 text-green-800" },
+  ],
+};
+
+// Resolve the exact estado value to assign when dropping into a column for a given tab/tipo
+function resolveDropEstado(colEstados: string[], tipo: string, tab: string): string {
+  // For specific tabs, there's only one estado per column — use it directly
+  if (tab !== "todo") return colEstados[0];
+  // For "todo" tab, resolve by tipo
+  const t = tipo.toLowerCase();
+  if (colEstados.some((e) => e.toLowerCase().includes("pendiente"))) {
+    if (t.includes("factura")) return "PENDIENTE (Factura)";
+    if (t.includes("consulta")) return "PENDIENTE (Consulta)";
+    return "PENDIENTE (Pedido)";
+  }
+  if (colEstados.includes("Enviado") || colEstados.includes("Pagada") || colEstados.includes("Respondida")) {
+    if (t.includes("factura")) return "Pagada";
+    if (t.includes("consulta")) return "Respondida";
+    return "Enviado";
+  }
+  if (colEstados.includes("En Curso") || colEstados.includes("Revisada")) {
+    if (t.includes("factura")) return "Revisada";
+    return "En Curso";
+  }
+  return colEstados[0];
+}
+
+function KanbanBoard({
+  filtrados,
+  activeTab,
+  updateCell,
+  saving,
+  setRegistros,
+}: {
+  filtrados: RegistroConIdx[];
+  activeTab: string;
+  updateCell: (rowIndex: number, columna: number, valor: string) => Promise<void>;
+  saving: string | null;
+  setRegistros: React.Dispatch<React.SetStateAction<Registro[]>>;
+}) {
+  const columns = KANBAN_COLUMNS[activeTab] || KANBAN_COLUMNS.todo;
+  const dragIdx = useRef<number | null>(null);
+
+  const getCardsForColumn = (colEstados: string[]) => {
+    const lowerEstados = colEstados.map((e) => e.toLowerCase());
+    return filtrados.filter((r) => lowerEstados.includes(r.estado.toLowerCase()));
+  };
+
+  // Cards with no matching column go to first column
+  const unmatchedCards = filtrados.filter((r) => {
+    const allEstados = columns.flatMap((c) => c.estados.map((e) => e.toLowerCase()));
+    return !allEstados.includes(r.estado.toLowerCase());
+  });
+
+  const handleDrop = async (e: React.DragEvent, colEstados: string[]) => {
+    e.preventDefault();
+    const idx = dragIdx.current;
+    if (idx === null) return;
+    const registro = filtrados.find((r) => r._idx === idx);
+    if (!registro) return;
+    const newEstado = resolveDropEstado(colEstados, registro.tipo, activeTab);
+    if (newEstado.toLowerCase() === registro.estado.toLowerCase()) return;
+    // Optimistic update
+    setRegistros((prev) =>
+      prev.map((r, i) => (i === idx ? { ...r, estado: newEstado } : r))
+    );
+    await updateCell(idx, 6, newEstado);
+  };
+
+  return (
+    <div className="flex gap-4 overflow-x-auto pb-2">
+      {columns.map((col) => {
+        let cards = getCardsForColumn(col.estados);
+        // Attach unmatched cards to first column
+        if (col === columns[0]) cards = [...unmatchedCards, ...cards];
+
+        return (
+          <div
+            key={col.label}
+            className={`flex-shrink-0 w-72 rounded-xl border-2 ${col.color} flex flex-col`}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => handleDrop(e, col.estados)}
+          >
+            {/* Column header */}
+            <div className={`px-3 py-2 rounded-t-xl flex items-center justify-between ${col.headerColor}`}>
+              <span className="text-sm font-semibold">{col.label}</span>
+              <span className="text-xs font-bold px-1.5 py-0.5 rounded-full bg-white/60">
+                {cards.length}
+              </span>
+            </div>
+            {/* Cards */}
+            <div className="flex flex-col gap-2 p-2 min-h-[120px]">
+              {cards.length === 0 ? (
+                <div className="flex-1 flex items-center justify-center py-8">
+                  <p className="text-xs text-muted-foreground">Sin registros</p>
+                </div>
+              ) : (
+                cards.map((r) => (
+                  <KanbanCard
+                    key={r._idx}
+                    registro={r}
+                    saving={saving === `${r._idx + 2}-6`}
+                    onDragStart={() => { dragIdx.current = r._idx; }}
+                  />
+                ))
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function KanbanCard({
+  registro: r,
+  saving,
+  onDragStart,
+}: {
+  registro: RegistroConIdx;
+  saving: boolean;
+  onDragStart: () => void;
+}) {
+  const tipoCfg = Object.entries(TIPO_CONFIG).find(([k]) =>
+    r.tipo.toLowerCase().includes(k.toLowerCase())
+  )?.[1];
+
+  const enlaces = r.enlace
+    ? r.enlace.split(",").map((e) => e.trim()).filter(Boolean)
+    : [];
+
+  return (
+    <div
+      draggable
+      onDragStart={onDragStart}
+      className={`bg-white rounded-lg border shadow-sm p-3 cursor-grab active:cursor-grabbing select-none transition-opacity ${
+        saving ? "opacity-50" : "hover:shadow-md"
+      }`}
+    >
+      {/* Top row: tipo badge + prioridad */}
+      <div className="flex items-center justify-between mb-1.5">
+        <div className="flex items-center gap-1.5">
+          {tipoCfg && (
+            <span className={`inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded border ${tipoCfg.color}`}>
+              {tipoCfg.icon}
+              {r.tipo}
+            </span>
+          )}
+          {r.prioridad?.toLowerCase().includes("urgente") && (
+            <span className="text-[11px] font-medium px-1.5 py-0.5 rounded border bg-red-100 text-red-700 border-red-200">
+              Urgente
+            </span>
+          )}
+          {r.prioridad?.toLowerCase().includes("recogida") && (
+            <span className="text-[11px] font-medium px-1.5 py-0.5 rounded border bg-blue-100 text-blue-700 border-blue-200">
+              Recogida
+            </span>
+          )}
+        </div>
+        {saving && <RefreshCw className="h-3 w-3 animate-spin text-gray-400 shrink-0" />}
+      </div>
+
+      {/* Client name */}
+      <p className="text-sm font-semibold text-gray-800 truncate" title={r.quien}>
+        {limpiarNombre(r.quien)}
+      </p>
+
+      {/* Subject */}
+      <p className="text-xs text-muted-foreground truncate mt-0.5" title={r.asunto}>
+        {r.asunto.replace(/^"+|"+$/g, "")}
+      </p>
+
+      {/* Bottom row: date + actions */}
+      <div className="flex items-center justify-between mt-2">
+        <span className="text-[11px] text-muted-foreground">{formatFecha(r.fecha)}</span>
+        <div className="flex items-center gap-1">
+          {enlaces.length > 0 && (
+            <a
+              href={enlaces[0]}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-1 rounded text-blue-500 hover:bg-blue-50"
+              title="Ver documento"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          )}
+          {r.telefono && (
+            <a
+              href={getWhatsAppLink(r.telefono, r.quien, r.asunto, r.tipo, r.estado)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`p-1 rounded text-white transition-colors ${
+                r.estado?.toLowerCase() === "enviado"
+                  ? "bg-green-500 hover:bg-green-600"
+                  : "bg-gray-400 hover:bg-gray-500"
+              }`}
+              title="Abrir WhatsApp"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <MessageCircle className="h-3.5 w-3.5" />
+            </a>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Supporting components ────────────────────────────────────────────────────
 
 const ESTADO_OPTIONS: Record<string, { value: string; label: string; color: string }[]> = {
   pedido: [
@@ -635,7 +902,6 @@ function EstadoDropdown({
   const options = ESTADO_OPTIONS[estadoType] || ESTADO_OPTIONS.pedido;
   const colorClass = getEstadoColor(estado, tipo);
 
-  // Normalize current estado to find match
   const currentMatch = options.find((o) => o.value.toLowerCase() === estado.toLowerCase());
   const currentValue = currentMatch ? currentMatch.value : estado;
 
