@@ -6,7 +6,6 @@ import {
   FileText,
   MessageSquare,
   AlertTriangle,
-  Clock,
   CheckCircle2,
   Truck,
   RefreshCw,
@@ -36,19 +35,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-  Legend,
-} from "recharts";
+import { ArrowRight } from "lucide-react";
 
 interface Registro {
   fecha: string;
@@ -126,7 +113,6 @@ const TIPO_CONFIG: Record<string, { color: string; icon: React.ReactNode }> = {
   "Consulta": { color: "bg-cyan-100 text-cyan-700 border-cyan-200", icon: <MessageSquare className="h-3 w-3" /> },
 };
 
-const PIE_COLORS = ["#f97316", "#8b5cf6", "#06b6d4", "#ef4444", "#10b981"];
 
 export default function DashboardPage() {
   const [registros, setRegistros] = useState<Registro[]>([]);
@@ -241,23 +227,16 @@ export default function DashboardPage() {
     return { pedidos, facturas, consultas, urgentes, enCurso, enviados };
   }, [registros]);
 
-  const tipoChartData = useMemo(() => {
-    const counts: Record<string, number> = {};
-    registros.forEach((r) => {
-      const tipo = r.tipo || r.estado.split(" ").pop() || "Otro";
-      counts[tipo] = (counts[tipo] || 0) + 1;
-    });
-    return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  }, [registros]);
-
-  const estadoChartData = useMemo(() => {
-    const counts: Record<string, number> = {};
-    registros.forEach((r) => {
-      const estado = r.estado || "Sin estado";
-      counts[estado] = (counts[estado] || 0) + 1;
-    });
-    return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  }, [registros]);
+  const funnelFacturas = useMemo(() => {
+    const total = stats.facturas.length;
+    const etapas = [
+      { label: "Pendiente", color: "bg-yellow-400", textColor: "text-yellow-700", bg: "bg-yellow-50", count: stats.facturas.filter((r) => r.estado.toLowerCase().includes("pendiente")).length },
+      { label: "Revisada", color: "bg-blue-400", textColor: "text-blue-700", bg: "bg-blue-50", count: stats.facturas.filter((r) => r.estado.toLowerCase() === "revisada").length },
+      { label: "Contabilizada", color: "bg-purple-400", textColor: "text-purple-700", bg: "bg-purple-50", count: stats.facturas.filter((r) => r.estado.toLowerCase() === "contabilizada").length },
+      { label: "Pagada", color: "bg-green-400", textColor: "text-green-700", bg: "bg-green-50", count: stats.facturas.filter((r) => r.estado.toLowerCase() === "pagada").length },
+    ];
+    return { etapas, total };
+  }, [stats.facturas]);
 
   if (loading) {
     return (
@@ -354,44 +333,92 @@ export default function DashboardPage() {
           <KPICard title="Enviados" value={stats.enviados.length} icon={<CheckCircle2 className="h-5 w-5" />} color="text-green-600" bg="bg-green-50" />
         </div>
 
-        {/* Charts */}
+        {/* Funnel + Urgentes */}
         <div className="grid md:grid-cols-2 gap-4">
+          {/* Funnel de facturas */}
           <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Por tipo</CardTitle>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <FileText className="h-4 w-4 text-violet-500" />
+                Flujo de facturas
+                <span className="ml-auto text-xs font-normal text-muted-foreground">{funnelFacturas.total} total</span>
+              </CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="h-[220px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={tipoChartData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={4} dataKey="value" label={({ name, value }) => `${name}: ${value}`}>
-                      {tipoChartData.map((_, i) => (
-                        <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Legend />
-                    <Tooltip />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
+            <CardContent className="space-y-3">
+              {funnelFacturas.etapas.map((etapa, i) => {
+                const pct = funnelFacturas.total > 0 ? Math.round((etapa.count / funnelFacturas.total) * 100) : 0;
+                return (
+                  <div key={etapa.label}>
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-1.5">
+                        {i > 0 && <ArrowRight className="h-3 w-3 text-muted-foreground" />}
+                        <span className="text-sm font-medium">{etapa.label}</span>
+                      </div>
+                      <span className={`text-sm font-bold ${etapa.textColor}`}>{etapa.count}</span>
+                    </div>
+                    <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${etapa.color} transition-all duration-500`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">{pct}% del total</p>
+                  </div>
+                );
+              })}
+              {funnelFacturas.total === 0 && (
+                <p className="text-sm text-muted-foreground text-center py-4">Sin facturas registradas</p>
+              )}
             </CardContent>
           </Card>
+
+          {/* Panel de urgentes */}
           <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Por estado</CardTitle>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-red-500" />
+                Urgentes
+                <span className="ml-auto text-xs font-normal text-muted-foreground">{stats.urgentes.length} registros</span>
+              </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="h-[220px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={estadoChartData} layout="vertical" margin={{ left: 20 }}>
-                    <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-                    <XAxis type="number" allowDecimals={false} />
-                    <YAxis type="category" dataKey="name" width={120} tick={{ fontSize: 12 }} />
-                    <Tooltip />
-                    <Bar dataKey="value" fill="#f97316" radius={[0, 4, 4, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+              {stats.urgentes.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-6 gap-2">
+                  <CheckCircle2 className="h-8 w-8 text-green-400" />
+                  <p className="text-sm text-muted-foreground">Sin urgencias pendientes</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {stats.urgentes.slice(0, 5).map((r, i) => {
+                    const tipoCfg = Object.entries(TIPO_CONFIG).find(([k]) =>
+                      r.tipo.toLowerCase().includes(k.toLowerCase())
+                    )?.[1];
+                    return (
+                      <div key={i} className="flex items-start gap-2 p-2 rounded-lg bg-red-50 border border-red-100">
+                        <div className="shrink-0 mt-0.5">
+                          {tipoCfg ? (
+                            <span className={`inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded border ${tipoCfg.color}`}>
+                              {tipoCfg.icon}{r.tipo}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-semibold text-gray-800 truncate">{limpiarNombre(r.quien)}</p>
+                          <p className="text-[11px] text-muted-foreground truncate">{r.asunto.replace(/^"+|"+$/g, "")}</p>
+                        </div>
+                        <span className="text-[11px] shrink-0 px-1.5 py-0.5 rounded bg-white border border-gray-200 text-gray-600">
+                          {r.estado || "Sin estado"}
+                        </span>
+                      </div>
+                    );
+                  })}
+                  {stats.urgentes.length > 5 && (
+                    <p className="text-xs text-muted-foreground text-center pt-1">
+                      +{stats.urgentes.length - 5} más — filtra por Urgente en la tabla
+                    </p>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
