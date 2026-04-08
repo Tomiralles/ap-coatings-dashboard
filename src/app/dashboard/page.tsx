@@ -15,6 +15,10 @@ import {
   MessageCircle,
   LayoutList,
   Columns,
+  Bot,
+  Send,
+  X,
+  RotateCcw,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -49,6 +53,20 @@ interface Registro {
   autoDropdown: string;
   respuestaAuto: string;
   telefono: string;
+}
+
+interface RespuestaPendiente {
+  id: string;
+  fechaCreacion: string;
+  tipo: "email" | "whatsapp";
+  rowOrigen: string;
+  destinatario: string;
+  asunto: string;
+  threadId: string;
+  borrador: string;
+  estado: "pendiente" | "aprobado" | "rechazado";
+  enviadoEn: string;
+  contextoJson: string;
 }
 
 interface RegistroConIdx extends Registro {
@@ -124,6 +142,8 @@ export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState("todo");
   const [saving, setSaving] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"table" | "kanban">("table");
+  const [respuestas, setRespuestas] = useState<RespuestaPendiente[]>([]);
+  const [generandoIA, setGenerandoIA] = useState<string | null>(null);
 
   const updateCell = useCallback(async (
     rowIndex: number,
@@ -158,6 +178,14 @@ export default function DashboardPage() {
             return r;
           })
         );
+        // Trigger IA cuando el pedido se marca como "Enviado"
+        if (columna === 6 && valor === "Enviado" && registroActual.tipo.toLowerCase().includes("pedido")) {
+          const registroActualizado = { ...registroActual, estado: valor };
+          generarRespuesta(rowIndex, "email", registroActualizado);
+          if (registroActual.telefono) {
+            generarRespuesta(rowIndex, "whatsapp", registroActualizado);
+          }
+        }
       } else {
         alert("Error al guardar: " + (data.error || "desconocido"));
       }
@@ -186,8 +214,67 @@ export default function DashboardPage() {
     }
   };
 
+  const fetchRespuestas = async () => {
+    try {
+      const res = await fetch("/api/respuestas");
+      const json = await res.json();
+      if (!json.error) setRespuestas(json.respuestas ?? []);
+    } catch { /* silencioso */ }
+  };
+
+  const generarRespuesta = async (
+    rowIndex: number,
+    tipo: "email" | "whatsapp",
+    registro: Registro
+  ) => {
+    const key = `${rowIndex}-${tipo}`;
+    setGenerandoIA(key);
+    try {
+      const contexto = {
+        quien: registro.quien,
+        asunto: registro.asunto,
+        cuerpo: registro.cuerpo,
+        tipo: registro.tipo,
+        estado: registro.estado,
+      };
+
+      const res = await fetch("/api/claude/generar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tipo, contexto }),
+      });
+      const { borrador } = await res.json();
+      if (!borrador) return;
+
+      await fetch("/api/respuestas/crear", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tipo,
+          rowOrigen: String(rowIndex + 2),
+          destinatario: tipo === "email"
+            ? registro.quien.match(/[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}/)?.[0] ?? registro.quien
+            : registro.telefono,
+          asunto: `Re: ${registro.asunto.replace(/^"+|"+$/g, "")}`,
+          threadId: "",
+          borrador,
+          contextoJson: JSON.stringify(contexto),
+        }),
+      });
+
+      await fetchRespuestas();
+    } catch (err) {
+      console.error("Error generando respuesta IA:", err);
+    } finally {
+      setGenerandoIA(null);
+    }
+  };
+
   useEffect(() => {
     fetchData();
+    fetchRespuestas();
+    const interval = setInterval(fetchRespuestas, 30000);
+    return () => clearInterval(interval);
   }, []);
 
   const filtrados = useMemo(() => {
@@ -280,7 +367,15 @@ export default function DashboardPage() {
             </div>
             <div>
               <h1 className="text-lg font-bold leading-tight">AP Coatings</h1>
-              <p className="text-xs text-muted-foreground">Panel de control - Pedidos y Facturas</p>
+              <div className="flex items-center gap-2">
+                <p className="text-xs text-muted-foreground">Panel de control - Pedidos y Facturas</p>
+                {respuestas.length > 0 && (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-1.5 py-0.5 rounded-full bg-orange-500 text-white animate-pulse">
+                    <Bot className="h-3 w-3" />
+                    {respuestas.length}
+                  </span>
+                )}
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -423,6 +518,14 @@ export default function DashboardPage() {
           </Card>
         </div>
 
+        {/* Cola de Respuestas IA */}
+        {respuestas.length > 0 && (
+          <ColaRespuestas
+            respuestas={respuestas}
+            onRespuestasChange={fetchRespuestas}
+          />
+        )}
+
         {/* Filters + Table/Kanban */}
         <Card>
           <CardHeader className="pb-3">
@@ -492,6 +595,7 @@ export default function DashboardPage() {
                             <TableHead className="w-[100px]">Tipo</TableHead>
                             <TableHead className="w-[100px]">Prioridad</TableHead>
                             <TableHead className="w-[60px]">Docs</TableHead>
+                            <TableHead className="w-[48px]">IA</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -624,6 +728,21 @@ export default function DashboardPage() {
                                       <span className="text-xs text-muted-foreground">—</span>
                                     )}
                                   </TableCell>
+                                  <TableCell>
+                                    {(r.tipo.toLowerCase().includes("pedido") || r.tipo.toLowerCase().includes("consulta")) && (
+                                      <button
+                                        title="Generar respuesta con IA"
+                                        disabled={!!generandoIA}
+                                        onClick={() => generarRespuesta(r._idx, "email", r)}
+                                        className="p-1.5 rounded-md text-orange-500 hover:bg-orange-50 disabled:opacity-40 transition-colors"
+                                      >
+                                        {generandoIA === `${r._idx}-email`
+                                          ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                                          : <Bot className="h-3.5 w-3.5" />
+                                        }
+                                      </button>
+                                    )}
+                                  </TableCell>
                                 </TableRow>
                               );
                             })
@@ -649,6 +768,173 @@ export default function DashboardPage() {
         </Card>
       </main>
     </div>
+  );
+}
+
+// ─── Cola de Respuestas IA ────────────────────────────────────────────────────
+
+function ColaRespuestas({
+  respuestas,
+  onRespuestasChange,
+}: {
+  respuestas: RespuestaPendiente[];
+  onRespuestasChange: () => Promise<void>;
+}) {
+  const [borradores, setBorradores] = useState<Record<string, string>>({});
+  const [enviando, setEnviando] = useState<string | null>(null);
+  const [regenerando, setRegenerando] = useState<string | null>(null);
+
+  const getBorrador = (r: RespuestaPendiente) =>
+    borradores[r.id] !== undefined ? borradores[r.id] : r.borrador;
+
+  const handleAprobar = async (r: RespuestaPendiente) => {
+    setEnviando(r.id);
+    try {
+      const res = await fetch("/api/respuestas/aprobar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: r.id,
+          tipo: r.tipo,
+          destinatario: r.destinatario,
+          asunto: r.asunto,
+          threadId: r.threadId,
+          borradorFinal: getBorrador(r),
+          contextoJson: r.contextoJson,
+        }),
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        alert("Error al enviar: " + (data.error || "desconocido"));
+        return;
+      }
+      await onRespuestasChange();
+    } catch {
+      alert("Error de conexión al enviar");
+    } finally {
+      setEnviando(null);
+    }
+  };
+
+  const handleRechazar = async (r: RespuestaPendiente) => {
+    setEnviando(r.id);
+    try {
+      await fetch("/api/respuestas/rechazar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: r.id }),
+      });
+      await onRespuestasChange();
+    } catch {
+      alert("Error al rechazar");
+    } finally {
+      setEnviando(null);
+    }
+  };
+
+  const handleRegenerar = async (r: RespuestaPendiente) => {
+    setRegenerando(r.id);
+    try {
+      let contexto = { quien: r.destinatario, asunto: r.asunto, cuerpo: "", tipo: r.tipo === "whatsapp" ? "Pedido" : "Consulta", estado: "" };
+      try { contexto = { ...contexto, ...JSON.parse(r.contextoJson) }; } catch { /* ok */ }
+
+      const res = await fetch("/api/claude/generar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tipo: r.tipo, contexto }),
+      });
+      const { borrador } = await res.json();
+      if (borrador) setBorradores((prev) => ({ ...prev, [r.id]: borrador }));
+    } catch {
+      alert("Error al regenerar");
+    } finally {
+      setRegenerando(null);
+    }
+  };
+
+  return (
+    <Card className="border-orange-200 bg-orange-50/30">
+      <CardHeader className="pb-3">
+        <div className="flex items-center gap-2">
+          <div className="h-7 w-7 rounded-md bg-orange-500 flex items-center justify-center">
+            <Bot className="h-4 w-4 text-white" />
+          </div>
+          <CardTitle className="text-base">Respuestas pendientes de aprobación</CardTitle>
+          <span className="ml-auto text-xs font-semibold px-2 py-0.5 rounded-full bg-orange-500 text-white">
+            {respuestas.length}
+          </span>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {respuestas.map((r) => {
+          const isEnviando = enviando === r.id;
+          const isRegenerando = regenerando === r.id;
+          const disabled = isEnviando || isRegenerando;
+
+          return (
+            <div key={r.id} className="bg-white rounded-xl border shadow-sm p-4 space-y-3">
+              {/* Header de la tarjeta */}
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full border ${
+                    r.tipo === "whatsapp"
+                      ? "bg-green-100 text-green-700 border-green-200"
+                      : "bg-blue-100 text-blue-700 border-blue-200"
+                  }`}>
+                    {r.tipo === "whatsapp" ? <MessageCircle className="h-3 w-3" /> : <Send className="h-3 w-3" />}
+                    {r.tipo === "whatsapp" ? "WhatsApp" : "Email"}
+                  </span>
+                  <span className="text-sm font-medium truncate max-w-[240px]">{r.destinatario}</span>
+                  {r.asunto && (
+                    <span className="text-xs text-muted-foreground truncate max-w-[200px]">{r.asunto}</span>
+                  )}
+                </div>
+                <span className="text-[11px] text-muted-foreground shrink-0 whitespace-nowrap">
+                  {r.fechaCreacion ? new Date(r.fechaCreacion).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : ""}
+                </span>
+              </div>
+
+              {/* Textarea editable con el borrador */}
+              <textarea
+                className="w-full text-sm border rounded-lg p-3 resize-none focus:ring-2 focus:ring-orange-400 outline-none bg-gray-50 min-h-[100px]"
+                value={getBorrador(r)}
+                disabled={disabled}
+                onChange={(e) => setBorradores((prev) => ({ ...prev, [r.id]: e.target.value }))}
+                rows={4}
+              />
+
+              {/* Botones de acción */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={() => handleAprobar(r)}
+                  disabled={disabled}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-semibold rounded-md transition-colors disabled:opacity-50"
+                >
+                  {isEnviando ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                  Aprobar y enviar
+                </button>
+                <button
+                  onClick={() => handleRegenerar(r)}
+                  disabled={disabled}
+                  className="flex items-center gap-1.5 px-3 py-1.5 border hover:bg-gray-50 text-xs font-medium rounded-md transition-colors disabled:opacity-50"
+                >
+                  {isRegenerando ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+                  Regenerar
+                </button>
+                <button
+                  onClick={() => handleRechazar(r)}
+                  disabled={disabled}
+                  className="flex items-center gap-1.5 px-3 py-1.5 border border-red-200 text-red-600 hover:bg-red-50 text-xs font-medium rounded-md transition-colors disabled:opacity-50 ml-auto"
+                >
+                  <X className="h-3.5 w-3.5" />
+                  Rechazar
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </CardContent>
+    </Card>
   );
 }
 
