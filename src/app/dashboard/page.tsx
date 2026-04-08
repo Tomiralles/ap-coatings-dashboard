@@ -523,6 +523,7 @@ export default function DashboardPage() {
           <ColaRespuestas
             respuestas={respuestas}
             onRespuestasChange={fetchRespuestas}
+            onRemove={(id) => setRespuestas(prev => prev.filter(r => r.id !== id))}
           />
         )}
 
@@ -776,9 +777,11 @@ export default function DashboardPage() {
 function ColaRespuestas({
   respuestas,
   onRespuestasChange,
+  onRemove,
 }: {
   respuestas: RespuestaPendiente[];
   onRespuestasChange: () => Promise<void>;
+  onRemove: (id: string) => void;
 }) {
   const [borradores, setBorradores] = useState<Record<string, string>>({});
   const [enviando, setEnviando] = useState<string | null>(null);
@@ -808,7 +811,8 @@ function ColaRespuestas({
         alert("Error al enviar: " + (data.error || "desconocido"));
         return;
       }
-      await onRespuestasChange();
+      onRemove(r.id);
+      onRespuestasChange();
     } catch {
       alert("Error de conexión al enviar");
     } finally {
@@ -824,7 +828,8 @@ function ColaRespuestas({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: r.id }),
       });
-      await onRespuestasChange();
+      onRemove(r.id);
+      onRespuestasChange();
     } catch {
       alert("Error al rechazar");
     } finally {
