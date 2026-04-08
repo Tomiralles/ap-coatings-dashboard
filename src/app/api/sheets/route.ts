@@ -4,11 +4,43 @@ const SPREADSHEET_ID = "1AwQRGxXeIWIN5ODjvDbbjNGCB-UQ8UdEPZUpuoHKzvE";
 const SHEET_NAME = "Hoja 1";
 
 export async function GET() {
-  const apiKey = process.env.GOOGLE_SHEETS_API_KEY;
+  // Intentar primero vía Apps Script (más fiable, no depende de API key)
+  const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
+  if (scriptUrl) {
+    try {
+      const res = await fetch(`${scriptUrl}?accion=leerHoja&hoja=${encodeURIComponent(SHEET_NAME)}`, {
+        method: "GET",
+        redirect: "follow",
+      });
+      const data = await res.json();
+      if (data.ok && data.values) {
+        const rows: string[][] = data.values;
+        if (rows.length < 2) return NextResponse.json({ registros: [] });
+        const registros = rows.slice(1).map((row) => ({
+          fecha: row[0] ?? "",
+          quien: row[1] ?? "",
+          asunto: row[2] ?? "",
+          enlace: row[3] ?? "",
+          cuerpo: row[4] ?? "",
+          estado: row[5] ?? "",
+          tipo: row[6] ?? "",
+          prioridad: row[7] ?? "",
+          autoDropdown: row[8] ?? "",
+          respuestaAuto: row[9] ?? "",
+          telefono: row[10] ?? "",
+        }));
+        return NextResponse.json({ registros });
+      }
+    } catch (err) {
+      console.warn("Apps Script falló, intentando Sheets API:", err);
+    }
+  }
 
+  // Fallback: Sheets API con API key
+  const apiKey = process.env.GOOGLE_SHEETS_API_KEY;
   if (!apiKey) {
     return NextResponse.json(
-      { error: "GOOGLE_SHEETS_API_KEY no configurada" },
+      { error: "Ni GOOGLE_APPS_SCRIPT_URL ni GOOGLE_SHEETS_API_KEY configuradas" },
       { status: 500 }
     );
   }
