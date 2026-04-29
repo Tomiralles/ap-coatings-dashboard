@@ -42,7 +42,7 @@ export async function POST(request: Request) {
 
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
-      model: "gemini-2.0-flash-001",
+      model: "gemini-1.5-flash",
       systemInstruction: SYSTEM_PROMPT,
     });
 
@@ -50,8 +50,10 @@ export async function POST(request: Request) {
     const borrador = result.response.text();
 
     return NextResponse.json({ borrador });
-  } catch (err) {
-    console.error("Error generando borrador Gemini:", err);
-    return NextResponse.json({ error: "Error interno", details: String(err) }, { status: 500 });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : "";
+    console.error("Error generando borrador Gemini:", msg, stack);
+    return NextResponse.json({ error: "Error interno", details: msg }, { status: 500 });
   }
 }
