@@ -243,8 +243,14 @@ export default function DashboardPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tipo, contexto }),
       });
-      const { borrador } = await res.json();
-      if (!borrador) return;
+      const resJson = await res.json();
+      console.log("🤖 Respuesta Gemini:", resJson);
+      const { borrador } = resJson;
+      if (!borrador) {
+        console.error("❌ Error Gemini:", resJson.error, resJson.details);
+        alert(`Error generando respuesta: ${resJson.details || resJson.error || "Error desconocido"}`);
+        return;
+      }
 
       await fetch("/api/respuestas/crear", {
         method: "POST",
