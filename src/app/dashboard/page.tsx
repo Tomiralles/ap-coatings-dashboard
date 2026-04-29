@@ -19,6 +19,7 @@ import {
   Send,
   X,
   RotateCcw,
+  FlaskConical,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -144,6 +145,7 @@ export default function DashboardPage() {
   const [viewMode, setViewMode] = useState<"table" | "kanban">("table");
   const [respuestas, setRespuestas] = useState<RespuestaPendiente[]>([]);
   const [generandoIA, setGenerandoIA] = useState<string | null>(null);
+  const [mostrarPruebas, setMostrarPruebas] = useState(false);
 
   const updateCell = useCallback(async (
     rowIndex: number,
@@ -283,9 +285,20 @@ export default function DashboardPage() {
     return () => clearInterval(interval);
   }, []);
 
+  // Registros sin entradas de prueba (filtro base)
+  const registrosBase = useMemo(() => {
+    if (mostrarPruebas) return registros;
+    return registros.filter(r => !r.asunto.toLowerCase().includes("(prueba)"));
+  }, [registros, mostrarPruebas]);
+
+  const totalPruebas = useMemo(() =>
+    registros.filter(r => r.asunto.toLowerCase().includes("(prueba)")).length,
+    [registros]
+  );
+
   const filtrados = useMemo(() => {
-    return registros
-      .map((r, idx) => ({ ...r, _idx: idx }))
+    return registrosBase
+      .map((r, idx) => ({ ...r, _idx: registros.indexOf(r) }))
       .filter((r) => {
         const matchSearch =
           search === "" ||
@@ -307,18 +320,18 @@ export default function DashboardPage() {
         if (activeTab === "consultas") return matchSearch && matchEstado && r.tipo.toLowerCase().includes("consulta");
         return matchSearch && matchEstado && matchTipo;
       });
-  }, [registros, search, filtroEstado, filtroTipo, activeTab]);
+  }, [registrosBase, registros, search, filtroEstado, filtroTipo, activeTab]);
 
   const stats = useMemo(() => {
-    const pedidos = registros.filter((r) => r.tipo.toLowerCase().includes("pedido"));
-    const facturas = registros.filter((r) => r.tipo.toLowerCase().includes("factura") || r.estado.toLowerCase().includes("factura") || ["revisada", "contabilizada", "pagada"].includes(r.estado.toLowerCase()));
-    const consultas = registros.filter((r) => r.tipo.toLowerCase().includes("consulta"));
-    const urgentes = registros.filter((r) => r.prioridad.toLowerCase().includes("urgente"));
-    const enCurso = registros.filter((r) => r.estado.toLowerCase().includes("en curso"));
-    const enviados = registros.filter((r) => r.estado.toLowerCase() === "enviado");
+    const pedidos = registrosBase.filter((r) => r.tipo.toLowerCase().includes("pedido"));
+    const facturas = registrosBase.filter((r) => r.tipo.toLowerCase().includes("factura") || r.estado.toLowerCase().includes("factura") || ["revisada", "contabilizada", "pagada"].includes(r.estado.toLowerCase()));
+    const consultas = registrosBase.filter((r) => r.tipo.toLowerCase().includes("consulta"));
+    const urgentes = registrosBase.filter((r) => r.prioridad.toLowerCase().includes("urgente"));
+    const enCurso = registrosBase.filter((r) => r.estado.toLowerCase().includes("en curso"));
+    const enviados = registrosBase.filter((r) => r.estado.toLowerCase() === "enviado");
 
     return { pedidos, facturas, consultas, urgentes, enCurso, enviados };
-  }, [registros]);
+  }, [registrosBase]);
 
   const funnelFacturas = useMemo(() => {
     const total = stats.facturas.length;
@@ -412,7 +425,23 @@ export default function DashboardPage() {
                 <span className="hidden sm:inline">Kanban</span>
               </button>
             </div>
-            <button
+            {totalPruebas > 0 && (
+              <button
+                onClick={() => setMostrarPruebas(prev => !prev)}
+                className={`flex items-center gap-2 px-3 py-2 text-sm rounded-md border transition-colors ${
+                  mostrarPruebas
+                    ? "bg-yellow-100 border-yellow-300 text-yellow-700 hover:bg-yellow-200"
+                    : "hover:bg-gray-50 text-gray-600"
+                }`}
+                title={mostrarPruebas ? "Ocultar entradas de prueba" : `Hay ${totalPruebas} entradas de prueba ocultas`}
+              >
+                <FlaskConical className="h-4 w-4" />
+                <span className="hidden sm:inline">
+                  {mostrarPruebas ? "Ocultar pruebas" : `+${totalPruebas} pruebas`}
+                </span>
+              </button>
+            )}
+                        <button
               onClick={fetchData}
               className="flex items-center gap-2 px-3 py-2 text-sm rounded-md border hover:bg-gray-50 transition-colors"
             >
@@ -579,7 +608,7 @@ export default function DashboardPage() {
           <Tabs value={activeTab} onValueChange={setActiveTab}>
             <div className="px-6">
               <TabsList className="grid w-full max-w-md grid-cols-4">
-                <TabsTrigger value="todo">Todo ({registros.length})</TabsTrigger>
+                <TabsTrigger value="todo">Todo ({registrosBase.length})</TabsTrigger>
                 <TabsTrigger value="pedidos">Pedidos ({stats.pedidos.length})</TabsTrigger>
                 <TabsTrigger value="facturas">Facturas ({stats.facturas.length})</TabsTrigger>
                 <TabsTrigger value="consultas">Consultas ({stats.consultas.length})</TabsTrigger>
@@ -598,9 +627,9 @@ export default function DashboardPage() {
                             <TableHead className="w-[180px]">Remitente</TableHead>
                             <TableHead>Asunto</TableHead>
                             <TableHead className="w-[160px]">Contacto / WA</TableHead>
-                            <TableHead className="w-[120px]">Estado</TableHead>
+                            <TableHead className="w-[148px]">Estado</TableHead>
                             <TableHead className="w-[100px]">Tipo</TableHead>
-                            <TableHead className="w-[100px]">Prioridad</TableHead>
+                            <TableHead className="w-[110px]">Prioridad</TableHead>
                             <TableHead className="w-[60px]">Docs</TableHead>
                             <TableHead className="w-[48px]">IA</TableHead>
                           </TableRow>
@@ -1189,6 +1218,7 @@ const ESTADO_OPTIONS: Record<string, { value: string; label: string; color: stri
     { value: "Enviado", label: "Enviado", color: "bg-green-100 text-green-800 border-green-200" },
   ],
   factura: [
+    { value: "FACTURA PROVEEDOR", label: "Fact. Proveedor", color: "bg-violet-100 text-violet-800 border-violet-200" },
     { value: "PENDIENTE (Factura)", label: "Pendiente", color: "bg-yellow-100 text-yellow-800 border-yellow-200" },
     { value: "Revisada", label: "Revisada", color: "bg-blue-100 text-blue-800 border-blue-200" },
     { value: "Contabilizada", label: "Contabilizada", color: "bg-purple-100 text-purple-800 border-purple-200" },
