@@ -4,26 +4,24 @@ export async function GET() {
   const apiKey = process.env.GOOGLE_AI_API_KEY;
 
   if (!apiKey) {
-    return NextResponse.json({ ok: false, step: "api_key_check", error: "GOOGLE_AI_API_KEY no configurada" });
+    return NextResponse.json({ ok: false, error: "GOOGLE_AI_API_KEY no configurada" });
   }
 
   try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-8b:generateContent?key=${apiKey}`;
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: "Di 'hola' en español." }] }],
-      }),
-    });
+    // Listar modelos disponibles para esta API key
+    const listUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
+    const res = await fetch(listUrl);
     const json = await res.json();
     if (!res.ok) {
-      return NextResponse.json({ ok: false, step: "gemini_call", error: json, keyPrefix: apiKey.substring(0, 10) + "..." });
+      return NextResponse.json({ ok: false, error: json, keyPrefix: apiKey.substring(0, 10) + "..." });
     }
-    const text = json?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-    return NextResponse.json({ ok: true, respuesta: text, keyPrefix: apiKey.substring(0, 10) + "..." });
+    // Filtrar solo los que soportan generateContent
+    const modelos = (json.models ?? [])
+      .filter((m: {supportedGenerationMethods?: string[]}) => m.supportedGenerationMethods?.includes("generateContent"))
+      .map((m: {name: string}) => m.name);
+    return NextResponse.json({ ok: true, modelos, keyPrefix: apiKey.substring(0, 10) + "..." });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ ok: false, step: "fetch_error", error: msg });
+    return NextResponse.json({ ok: false, error: msg });
   }
 }
