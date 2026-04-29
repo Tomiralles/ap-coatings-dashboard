@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 
 const SYSTEM_PROMPT = `Eres el asistente de AP Coatings, empresa española distribuidora de pinturas y productos químicos (EUROCLOR, ACRILOB, entre otros). Responde siempre en español. Tono profesional y cordial, conciso y directo. Firma siempre como "AP Coatings". No inventes precios ni fechas de entrega concretas. Si es para WhatsApp, máximo 3 frases con tono más cercano, sin saludos formales extensos.`;
 
+const MODEL_NAME = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
+
 export async function POST(request: Request) {
   const apiKey = process.env.GOOGLE_AI_API_KEY;
   if (!apiKey) {
@@ -39,8 +41,8 @@ export async function POST(request: Request) {
       userPrompt = `El cliente ${nombreLimpio} ha enviado un pedido/mensaje. Asunto: "${contexto.asunto}". Contenido: "${contexto.cuerpo?.substring(0, 400)}". Redacta una respuesta email confirmando la recepción y que se está procesando su solicitud. Tono profesional y cordial.`;
     }
 
-    // Llamada directa a la API REST de Google (v1, sin SDK)
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${apiKey}`;
+    // Llamada directa a la API REST de Google (v1beta, sin SDK)
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`;
     const geminiRes = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
