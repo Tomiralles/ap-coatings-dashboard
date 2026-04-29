@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const SYSTEM_PROMPT = `Eres el asistente de AP Coatings, empresa española distribuidora de pinturas y productos químicos (EUROCLOR, ACRILOB, entre otros). Responde siempre en español. Tono profesional y cordial, conciso y directo. Firma siempre como "AP Coatings". No inventes precios ni fechas de entrega concretas. Si es para WhatsApp, máximo 3 frases con tono más cercano, sin saludos formales extensos.`;
 
@@ -40,20 +39,33 @@ export async function POST(request: Request) {
       userPrompt = `El cliente ${nombreLimpio} ha enviado un pedido/mensaje. Asunto: "${contexto.asunto}". Contenido: "${contexto.cuerpo?.substring(0, 400)}". Redacta una respuesta email confirmando la recepción y que se está procesando su solicitud. Tono profesional y cordial.`;
     }
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: "gemini-1.5-flash",
-      systemInstruction: SYSTEM_PROMPT,
+    // Llamada directa a la API REST de Google (v1, sin SDK)
+    const url = `https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+    const geminiRes = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+        contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+      }),
     });
 
-    const result = await model.generateContent(userPrompt);
-    const borrador = result.response.text();
+    const geminiJson = await geminiRes.json();
+
+    if (!geminiRes.ok) {
+      console.error("Error Gemini API:", JSON.stringify(geminiJson));
+      return NextResponse.json({ error: "Error Gemini", details: JSON.stringify(geminiJson) }, { status: 500 });
+    }
+
+    const borrador = geminiJson?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+    if (!borrador) {
+      return NextResponse.json({ error: "Respuesta vacía de Gemini", details: JSON.stringify(geminiJson) }, { status: 500 });
+    }
 
     return NextResponse.json({ borrador });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    const stack = err instanceof Error ? err.stack : "";
-    console.error("Error generando borrador Gemini:", msg, stack);
+    console.error("Error generando borrador Gemini:", msg);
     return NextResponse.json({ error: "Error interno", details: msg }, { status: 500 });
   }
 }

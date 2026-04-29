@@ -1,30 +1,29 @@
 import { NextResponse } from "next/server";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export async function GET() {
   const apiKey = process.env.GOOGLE_AI_API_KEY;
 
   if (!apiKey) {
-    return NextResponse.json({
-      ok: false,
-      step: "api_key_check",
-      error: "GOOGLE_AI_API_KEY no está configurada en Vercel"
-    });
+    return NextResponse.json({ ok: false, step: "api_key_check", error: "GOOGLE_AI_API_KEY no configurada" });
   }
 
   try {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-    const result = await model.generateContent("Di 'hola' en español.");
-    const text = result.response.text();
+    const url = `https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: "Di 'hola' en español." }] }],
+      }),
+    });
+    const json = await res.json();
+    if (!res.ok) {
+      return NextResponse.json({ ok: false, step: "gemini_call", error: json, keyPrefix: apiKey.substring(0, 10) + "..." });
+    }
+    const text = json?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
     return NextResponse.json({ ok: true, respuesta: text, keyPrefix: apiKey.substring(0, 10) + "..." });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({
-      ok: false,
-      step: "gemini_call",
-      error: msg,
-      keyPrefix: apiKey.substring(0, 10) + "..."
-    });
+    return NextResponse.json({ ok: false, step: "fetch_error", error: msg });
   }
 }
