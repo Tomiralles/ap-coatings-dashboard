@@ -7,9 +7,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "GOOGLE_APPS_SCRIPT_URL no configurada" }, { status: 500 });
   }
 
+  let id: string | undefined;
+
   try {
     const body = await request.json();
-    const { id, tipo, destinatario, asunto, threadId, borradorFinal, contextoJson } = body as {
+    const { tipo, destinatario, asunto, threadId, borradorFinal, contextoJson } = body as {
       id: string;
       tipo: "email" | "whatsapp";
       destinatario: string;
@@ -18,6 +20,7 @@ export async function POST(request: Request) {
       borradorFinal: string;
       contextoJson?: string;
     };
+    id = body?.id;
 
     if (!id || !tipo || !destinatario || !borradorFinal) {
       return NextResponse.json({ error: "Faltan parámetros requeridos" }, { status: 400 });
@@ -58,14 +61,15 @@ export async function POST(request: Request) {
     }
 
     if (!sendResult.ok) {
+      console.error("[aprobar] ERROR envío tipo:", tipo, "id:", id, sendResult.error);
       return NextResponse.json(
         { error: "Error al enviar mensaje", details: sendResult.error },
         { status: 500 }
       );
     }
 
-    // 2. Actualizar estado en Cola_Respuestas
-    await fetch(scriptUrl, {
+    // 2. Actualizar estado en Cola_Respuestas — verificar respuesta
+    const updateRes = await fetch(scriptUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -77,8 +81,25 @@ export async function POST(request: Request) {
       redirect: "follow",
     });
 
+    const updateText = await updateRes.text();
+    let updateData: { ok?: boolean; error?: string };
+    try {
+      updateData = JSON.parse(updateText);
+    } catch {
+      updateData = { ok: false, error: `Respuesta no-JSON de Apps Script: ${updateText.substring(0, 200)}` };
+    }
+
+    if (!updateData?.ok) {
+      // El mensaje ya fue enviado, pero no se pudo marcar en Sheets — loguear pero no fallar
+      console.error("[aprobar] actualizarCola falló id:", id, JSON.stringify(updateData));
+    } else {
+      console.log("[aprobar] OK id:", id, "tipo:", tipo);
+    }
+
     return NextResponse.json({ ok: true });
+
   } catch (err) {
+    console.error("[aprobar] ERROR interno id:", id, String(err));
     return NextResponse.json({ error: "Error interno", details: String(err) }, { status: 500 });
   }
 }
