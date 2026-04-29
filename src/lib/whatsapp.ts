@@ -1,4 +1,4 @@
-const WA_API_VERSION = "v19.0";
+const WA_API_VERSION = process.env.WHATSAPP_API_VERSION ?? "v21.0";
 
 function getCredentials() {
   return {
@@ -17,7 +17,7 @@ export async function sendWhatsAppNotification(to: string, clientName: string, o
   const { phoneId, token, templateName } = getCredentials();
 
   if (!phoneId || !token || !templateName) {
-    console.error("WhatsApp credentials not configured");
+    console.error("[whatsapp] Credentials not configured");
     return { ok: false, error: "Credentials missing" };
   }
 
@@ -47,7 +47,7 @@ export async function sendWhatsAppFreeform(to: string, text: string) {
   const { phoneId, token } = getCredentials();
 
   if (!phoneId || !token) {
-    console.error("WhatsApp credentials not configured");
+    console.error("[whatsapp] Credentials not configured");
     return { ok: false, error: "Credentials missing" };
   }
 
@@ -75,14 +75,24 @@ async function sendRequest(url: string, token: string, payload: object) {
     });
 
     const data = await res.json();
+
     if (!res.ok) {
-      console.error("WhatsApp API Error:", data);
-      return { ok: false, error: data.error?.message || "Unknown error" };
+      const errorCode = data?.error?.code;
+      const errorMsg = data?.error?.message ?? "Unknown error";
+
+      // Código 190 = token inválido/caducado (OAuth error)
+      if (errorCode === 190) {
+        console.error("[whatsapp] TOKEN_INVALID:", errorMsg);
+        return { ok: false, error: "TOKEN_INVALID", details: errorMsg };
+      }
+
+      console.error("[whatsapp] API Error code:", errorCode, "msg:", errorMsg);
+      return { ok: false, error: errorMsg };
     }
 
     return { ok: true, data };
   } catch (error) {
-    console.error("WhatsApp Request Error:", error);
+    console.error("[whatsapp] Request Error:", error);
     return { ok: false, error: String(error) };
   }
 }

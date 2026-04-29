@@ -62,6 +62,13 @@ export async function POST(request: Request) {
 
     if (!sendResult.ok) {
       console.error("[aprobar] ERROR envío tipo:", tipo, "id:", id, sendResult.error);
+      // Token WhatsApp inválido o caducado → 401 explícito
+      if (sendResult.error === "TOKEN_INVALID") {
+        return NextResponse.json(
+          { error: "Token WhatsApp inválido o caducado. Renueva WHATSAPP_ACCESS_TOKEN en Vercel.", details: (sendResult as { ok: boolean; error: string; details?: string }).details },
+          { status: 401 }
+        );
+      }
       return NextResponse.json(
         { error: "Error al enviar mensaje", details: sendResult.error },
         { status: 500 }
