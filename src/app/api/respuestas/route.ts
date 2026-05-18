@@ -12,9 +12,10 @@ export interface RespuestaPendiente {
   asunto: string;
   threadId: string;
   borrador: string;
-  estado: "pendiente" | "aprobado" | "rechazado";
+  estado: "pendiente" | "aprobado" | "rechazado" | "auto-aprobado";
   enviadoEn: string;
   contextoJson: string;
+  autoEnviado?: boolean;
 }
 
 export async function GET() {
@@ -31,7 +32,10 @@ export async function GET() {
         const rows: string[][] = data.values;
         if (rows.length < 2) return NextResponse.json({ respuestas: [] });
         const respuestas: RespuestaPendiente[] = rows.slice(1)
-          .filter((row) => (row[8] ?? "pendiente") === "pendiente")
+          .filter((row) => {
+            const estado = row[8] ?? "pendiente";
+            return estado === "pendiente" || estado === "auto-aprobado";
+          })
           .map((row, idx) => ({
             id: row[0] ?? String(idx),
             fechaCreacion: row[1] ?? "",
@@ -41,9 +45,10 @@ export async function GET() {
             asunto: row[5] ?? "",
             threadId: row[6] ?? "",
             borrador: row[7] ?? "",
-            estado: (row[8] ?? "pendiente") as "pendiente" | "aprobado" | "rechazado",
+            estado: (row[8] ?? "pendiente") as "pendiente" | "aprobado" | "rechazado" | "auto-aprobado",
             enviadoEn: row[9] ?? "",
             contextoJson: row[10] ?? "",
+            autoEnviado: (row[11] ?? "false").toLowerCase() === "true",
           }));
         return NextResponse.json({ respuestas });
       }
@@ -78,7 +83,10 @@ export async function GET() {
     }
 
     const respuestas: RespuestaPendiente[] = rows.slice(1)
-      .filter((row) => (row[8] ?? "pendiente") === "pendiente")
+      .filter((row) => {
+        const estado = row[8] ?? "pendiente";
+        return estado === "pendiente" || estado === "auto-aprobado";
+      })
       .map((row, idx) => ({
         id: row[0] ?? String(idx),
         fechaCreacion: row[1] ?? "",
@@ -88,9 +96,10 @@ export async function GET() {
         asunto: row[5] ?? "",
         threadId: row[6] ?? "",
         borrador: row[7] ?? "",
-        estado: (row[8] ?? "pendiente") as "pendiente" | "aprobado" | "rechazado",
+        estado: (row[8] ?? "pendiente") as "pendiente" | "aprobado" | "rechazado" | "auto-aprobado",
         enviadoEn: row[9] ?? "",
         contextoJson: row[10] ?? "",
+        autoEnviado: (row[11] ?? "false").toLowerCase() === "true",
       }));
 
     return NextResponse.json({ respuestas });

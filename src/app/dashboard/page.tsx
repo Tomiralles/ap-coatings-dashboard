@@ -65,9 +65,10 @@ interface RespuestaPendiente {
   asunto: string;
   threadId: string;
   borrador: string;
-  estado: "pendiente" | "aprobado" | "rechazado";
+  estado: "pendiente" | "aprobado" | "rechazado" | "auto-aprobado";
   enviadoEn: string;
   contextoJson: string;
+  autoEnviado?: boolean;
 }
 
 interface RegistroConIdx extends Registro {
@@ -146,6 +147,8 @@ export default function DashboardPage() {
   const [respuestas, setRespuestas] = useState<RespuestaPendiente[]>([]);
   const [generandoIA, setGenerandoIA] = useState<string | null>(null);
   const [mostrarPruebas, setMostrarPruebas] = useState(false);
+  const [ocupado, setOcupado] = useState(false);
+  const [cargandoOcupado, setCargandoOcupado] = useState(false);
 
   const updateCell = useCallback(async (
     rowIndex: number,
@@ -224,6 +227,31 @@ export default function DashboardPage() {
     } catch { /* silencioso */ }
   };
 
+  const fetchOcupado = async () => {
+    try {
+      const res = await fetch("/api/ocupado/estado");
+      const json = await res.json();
+      if (!json.error) setOcupado(json.ocupado ?? false);
+    } catch { /* silencioso */ }
+  };
+
+  const toggleOcupado = async () => {
+    setCargandoOcupado(true);
+    try {
+      const res = await fetch("/api/ocupado/estado", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ocupado: !ocupado }),
+      });
+      const json = await res.json();
+      if (!json.error) setOcupado(json.ocupado ?? false);
+    } catch {
+      alert("Error al cambiar estado");
+    } finally {
+      setCargandoOcupado(false);
+    }
+  };
+
   const generarRespuesta = async (
     rowIndex: number,
     tipo: "email" | "whatsapp",
@@ -254,7 +282,7 @@ export default function DashboardPage() {
         return;
       }
 
-      await fetch("/api/respuestas/crear", {
+      const autoEnviarRes = await fetch("/api/respuestas/auto-enviar", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -269,6 +297,11 @@ export default function DashboardPage() {
           contextoJson: JSON.stringify(contexto),
         }),
       });
+      const autoEnviarJson = await autoEnviarRes.json();
+      console.log("📤 Resultado auto-enviar:", autoEnviarJson);
+      if (autoEnviarJson.auto && autoEnviarJson.enviado) {
+        console.log("✅ Respuesta auto-enviada (modo ocupado activo)");
+      }
 
       await fetchRespuestas();
     } catch (err) {
@@ -281,8 +314,13 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchData();
     fetchRespuestas();
-    const interval = setInterval(fetchRespuestas, 30000);
-    return () => clearInterval(interval);
+    fetchOcupado();
+    const respuestasInterval = setInterval(fetchRespuestas, 30000);
+    const ocupadoInterval = setInterval(fetchOcupado, 10000);
+    return () => {
+      clearInterval(respuestasInterval);
+      clearInterval(ocupadoInterval);
+    };
   }, []);
 
   // Registros sin entradas de prueba (filtro base)
@@ -398,6 +436,23 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {/* Ocupado toggle */}
+            <button
+              onClick={toggleOcupado}
+              disabled={cargandoOcupado}
+              className={`flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-full transition-all ${
+                ocupado
+                  ? "bg-red-100 border border-red-300 text-red-700 hover:bg-red-200"
+                  : "bg-green-100 border border-green-300 text-green-700 hover:bg-green-200"
+              } ${cargandoOcupado ? "opacity-60 cursor-not-allowed" : ""}`}
+              title={ocupado ? "Estoy ocupado - respuestas automáticas activas" : "Disponible - modo normal"}
+            >
+              <span className={`text-base ${ocupado ? "opacity-100" : ""}`}>
+                {ocupado ? "🔴" : "🟢"}
+              </span>
+              <span className="hidden sm:inline">{ocupado ? "Ocupado" : "Disponible"}</span>
+            </button>
+
             {/* View mode toggle */}
             <div className="flex items-center rounded-md border overflow-hidden">
               <button
@@ -441,7 +496,7 @@ export default function DashboardPage() {
                 </span>
               </button>
             )}
-                        <button
+            <button
               onClick={fetchData}
               className="flex items-center gap-2 px-3 py-2 text-sm rounded-md border hover:bg-gray-50 transition-colors"
             >
@@ -910,9 +965,12 @@ function ColaRespuestas({
           const isEnviando = enviando === r.id;
           const isRegenerando = regenerando === r.id;
           const disabled = isEnviando || isRegenerando;
+          const esAutoAprobado = r.estado === "auto-aprobado";
 
           return (
-            <div key={r.id} className="bg-white rounded-xl border shadow-sm p-4 space-y-3">
+            <div key={r.id} className={`bg-white rounded-xl border shadow-sm p-4 space-y-3 ${
+              esAutoAprobado ? "border-orange-300 bg-orange-50/50" : ""
+            }`}>
               {/* Header de la tarjeta */}
               <div className="flex items-start justify-between gap-2">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -928,6 +986,12 @@ function ColaRespuestas({
                   {r.asunto && (
                     <span className="text-xs text-muted-foreground truncate max-w-[200px]">{r.asunto}</span>
                   )}
+                  {esAutoAprobado && (
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-orange-200 text-orange-700 border border-orange-300">
+                      <CheckCircle2 className="h-3 w-3" />
+                      AUTO ✓
+                    </span>
+                  )}
                 </div>
                 <span className="text-[11px] text-muted-foreground shrink-0 whitespace-nowrap">
                   {r.fechaCreacion ? new Date(r.fechaCreacion).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : ""}
@@ -938,37 +1002,54 @@ function ColaRespuestas({
               <textarea
                 className="w-full text-sm border rounded-lg p-3 resize-none focus:ring-2 focus:ring-orange-400 outline-none bg-gray-50 min-h-[100px]"
                 value={getBorrador(r)}
-                disabled={disabled}
+                disabled={disabled || esAutoAprobado}
                 onChange={(e) => setBorradores((prev) => ({ ...prev, [r.id]: e.target.value }))}
                 rows={4}
               />
 
               {/* Botones de acción */}
               <div className="flex items-center gap-2 flex-wrap">
-                <button
-                  onClick={() => handleAprobar(r)}
-                  disabled={disabled}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-semibold rounded-md transition-colors disabled:opacity-50"
-                >
-                  {isEnviando ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-                  Aprobar y enviar
-                </button>
-                <button
-                  onClick={() => handleRegenerar(r)}
-                  disabled={disabled}
-                  className="flex items-center gap-1.5 px-3 py-1.5 border hover:bg-gray-50 text-xs font-medium rounded-md transition-colors disabled:opacity-50"
-                >
-                  {isRegenerando ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
-                  Regenerar
-                </button>
-                <button
-                  onClick={() => handleRechazar(r)}
-                  disabled={disabled}
-                  className="flex items-center gap-1.5 px-3 py-1.5 border border-red-200 text-red-600 hover:bg-red-50 text-xs font-medium rounded-md transition-colors disabled:opacity-50 ml-auto"
-                >
-                  <X className="h-3.5 w-3.5" />
-                  Rechazar
-                </button>
+                {!esAutoAprobado && (
+                  <>
+                    <button
+                      onClick={() => handleAprobar(r)}
+                      disabled={disabled}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-semibold rounded-md transition-colors disabled:opacity-50"
+                    >
+                      {isEnviando ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                      Aprobar y enviar
+                    </button>
+                    <button
+                      onClick={() => handleRegenerar(r)}
+                      disabled={disabled}
+                      className="flex items-center gap-1.5 px-3 py-1.5 border hover:bg-gray-50 text-xs font-medium rounded-md transition-colors disabled:opacity-50"
+                    >
+                      {isRegenerando ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+                      Regenerar
+                    </button>
+                    <button
+                      onClick={() => handleRechazar(r)}
+                      disabled={disabled}
+                      className="flex items-center gap-1.5 px-3 py-1.5 border border-red-200 text-red-600 hover:bg-red-50 text-xs font-medium rounded-md transition-colors disabled:opacity-50 ml-auto"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                      Rechazar
+                    </button>
+                  </>
+                )}
+                {esAutoAprobado && (
+                  <div className="flex-1 flex items-center justify-between">
+                    <span className="text-xs text-orange-700 font-medium">Enviado automáticamente</span>
+                    <button
+                      onClick={() => handleRechazar(r)}
+                      disabled={disabled}
+                      className="flex items-center gap-1.5 px-3 py-1.5 border border-red-200 text-red-600 hover:bg-red-50 text-xs font-medium rounded-md transition-colors disabled:opacity-50"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                      Descartar
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           );

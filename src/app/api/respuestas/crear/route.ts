@@ -8,11 +8,14 @@ export async function POST(request: Request) {
 
   try {
     const body = await request.json();
-    const { tipo, rowOrigen, destinatario, asunto, threadId, borrador, contextoJson } = body;
+    const { tipo, rowOrigen, destinatario, asunto, threadId, borrador, contextoJson, auto } = body;
 
     if (!tipo || !destinatario || !borrador) {
       return NextResponse.json({ error: "Faltan parámetros: tipo, destinatario, borrador" }, { status: 400 });
     }
+
+    // Determine status based on auto flag
+    const estado = auto === true ? "auto-aprobado" : "pendiente";
 
     const res = await fetch(scriptUrl, {
       method: "POST",
@@ -26,6 +29,8 @@ export async function POST(request: Request) {
         threadId: threadId ?? "",
         borrador,
         contextoJson: contextoJson ?? "",
+        estado,
+        autoEnviado: auto === true,
       }),
       redirect: "follow",
     });
