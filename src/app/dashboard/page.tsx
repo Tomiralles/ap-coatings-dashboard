@@ -147,8 +147,6 @@ export default function DashboardPage() {
   const [respuestas, setRespuestas] = useState<RespuestaPendiente[]>([]);
   const [generandoIA, setGenerandoIA] = useState<string | null>(null);
   const [mostrarPruebas, setMostrarPruebas] = useState(false);
-  const [ocupado, setOcupado] = useState(false);
-  const [cargandoOcupado, setCargandoOcupado] = useState(false);
 
   const updateCell = useCallback(async (
     rowIndex: number,
@@ -227,31 +225,6 @@ export default function DashboardPage() {
     } catch { /* silencioso */ }
   };
 
-  const fetchOcupado = async () => {
-    try {
-      const res = await fetch("/api/ocupado/estado");
-      const json = await res.json();
-      if (!json.error) setOcupado(json.ocupado ?? false);
-    } catch { /* silencioso */ }
-  };
-
-  const toggleOcupado = async () => {
-    setCargandoOcupado(true);
-    try {
-      const res = await fetch("/api/ocupado/estado", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ocupado: !ocupado }),
-      });
-      const json = await res.json();
-      if (!json.error) setOcupado(json.ocupado ?? false);
-    } catch {
-      alert("Error al cambiar estado");
-    } finally {
-      setCargandoOcupado(false);
-    }
-  };
-
   const generarRespuesta = async (
     rowIndex: number,
     tipo: "email" | "whatsapp",
@@ -282,7 +255,7 @@ export default function DashboardPage() {
         return;
       }
 
-      const autoEnviarRes = await fetch("/api/respuestas/auto-enviar", {
+      await fetch("/api/respuestas/crear", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -297,11 +270,6 @@ export default function DashboardPage() {
           contextoJson: JSON.stringify(contexto),
         }),
       });
-      const autoEnviarJson = await autoEnviarRes.json();
-      console.log("📤 Resultado auto-enviar:", autoEnviarJson);
-      if (autoEnviarJson.auto && autoEnviarJson.enviado) {
-        console.log("✅ Respuesta auto-enviada (modo ocupado activo)");
-      }
 
       await fetchRespuestas();
     } catch (err) {
@@ -314,12 +282,9 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchData();
     fetchRespuestas();
-    fetchOcupado();
     const respuestasInterval = setInterval(fetchRespuestas, 30000);
-    const ocupadoInterval = setInterval(fetchOcupado, 10000);
     return () => {
       clearInterval(respuestasInterval);
-      clearInterval(ocupadoInterval);
     };
   }, []);
 
@@ -436,23 +401,6 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {/* Ocupado toggle */}
-            <button
-              onClick={toggleOcupado}
-              disabled={cargandoOcupado}
-              className={`flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-full transition-all ${
-                ocupado
-                  ? "bg-red-100 border border-red-300 text-red-700 hover:bg-red-200"
-                  : "bg-green-100 border border-green-300 text-green-700 hover:bg-green-200"
-              } ${cargandoOcupado ? "opacity-60 cursor-not-allowed" : ""}`}
-              title={ocupado ? "Estoy ocupado - respuestas automáticas activas" : "Disponible - modo normal"}
-            >
-              <span className={`text-base ${ocupado ? "opacity-100" : ""}`}>
-                {ocupado ? "🔴" : "🟢"}
-              </span>
-              <span className="hidden sm:inline">{ocupado ? "Ocupado" : "Disponible"}</span>
-            </button>
-
             {/* View mode toggle */}
             <div className="flex items-center rounded-md border overflow-hidden">
               <button
