@@ -20,6 +20,8 @@ import {
   X,
   RotateCcw,
   FlaskConical,
+  Zap,
+  ZapOff,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -147,6 +149,8 @@ export default function DashboardPage() {
   const [respuestas, setRespuestas] = useState<RespuestaPendiente[]>([]);
   const [generandoIA, setGenerandoIA] = useState<string | null>(null);
   const [mostrarPruebas, setMostrarPruebas] = useState(false);
+  const [ocupado, setOcupado] = useState<boolean | null>(null);
+  const [togglingOcupado, setTogglingOcupado] = useState(false);
 
   const updateCell = useCallback(async (
     rowIndex: number,
@@ -225,6 +229,38 @@ export default function DashboardPage() {
     } catch { /* silencioso */ }
   };
 
+  const fetchOcupado = async () => {
+    try {
+      const res = await fetch("/api/ocupado/estado");
+      const json = await res.json();
+      if (json.ocupado !== undefined) setOcupado(json.ocupado);
+    } catch { /* silencioso */ }
+  };
+
+  const toggleOcupado = async () => {
+    if (ocupado === null || togglingOcupado) return;
+    setTogglingOcupado(true);
+    const newValue = !ocupado;
+    setOcupado(newValue);
+    try {
+      const res = await fetch("/api/ocupado/estado", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ocupado: newValue }),
+      });
+      const json = await res.json();
+      if (!json.ok) {
+        setOcupado(!newValue);
+        alert("Error al cambiar modo: " + (json.error || "desconocido"));
+      }
+    } catch {
+      setOcupado(!newValue);
+      alert("Error de conexión al cambiar modo");
+    } finally {
+      setTogglingOcupado(false);
+    }
+  };
+
   const generarRespuesta = async (
     rowIndex: number,
     tipo: "email" | "whatsapp",
@@ -282,6 +318,7 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchData();
     fetchRespuestas();
+    fetchOcupado();
     const respuestasInterval = setInterval(fetchRespuestas, 30000);
     return () => {
       clearInterval(respuestasInterval);
@@ -442,6 +479,26 @@ export default function DashboardPage() {
                 <span className="hidden sm:inline">
                   {mostrarPruebas ? "Ocultar pruebas" : `+${totalPruebas} pruebas`}
                 </span>
+              </button>
+            )}
+            {ocupado !== null && (
+              <button
+                onClick={toggleOcupado}
+                disabled={togglingOcupado}
+                title={ocupado ? "Modo auto-envío activo — clic para desactivar" : "Modo aprobación manual — clic para activar auto-envío"}
+                className={`flex items-center gap-2 px-3 py-2 text-sm rounded-md border transition-colors disabled:opacity-50 ${
+                  ocupado
+                    ? "bg-green-100 border-green-300 text-green-700 hover:bg-green-200"
+                    : "hover:bg-gray-50 text-gray-600"
+                }`}
+              >
+                {togglingOcupado
+                  ? <RefreshCw className="h-4 w-4 animate-spin" />
+                  : ocupado
+                    ? <Zap className="h-4 w-4" />
+                    : <ZapOff className="h-4 w-4" />
+                }
+                <span className="hidden sm:inline">{ocupado ? "Auto-envío" : "Manual"}</span>
               </button>
             )}
             <button
