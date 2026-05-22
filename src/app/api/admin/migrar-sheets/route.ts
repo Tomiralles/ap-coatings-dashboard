@@ -213,7 +213,20 @@ async function migrar(modo: "dry-run" | "ejecutar"): Promise<ResultadoMigracion>
         resultado.clientes_actualizados++;
       }
 
-      // 4) INSERT email (con ON CONFLICT para idempotencia)
+      // Datos legacy del Sheet que el dashboard todavía usa
+      // Los guardamos en datos_extraidos JSONB para preservarlos
+      const datosLegacy = {
+        prioridad: fila.prioridad || "",
+        autoDropdown: fila.autoDropdown || "false",
+        respuestaAuto: fila.respuestaAuto || "",
+        telefono: fila.telefono || "",
+        estado_legacy: fila.estado || "",  // texto original del Sheet
+        tipo_legacy: fila.tipo || "",      // texto original del Sheet
+        fila_sheet_idx: i,                  // referencia a la fila original
+      };
+
+      // 4) UPSERT email — si ya existe, ACTUALIZA los datos extraídos
+      // (así re-ejecutar la migración refresca los campos legacy)
       const emailResult = await sqlDirect`
         INSERT INTO emails (
           gmail_message_id,
@@ -228,6 +241,7 @@ async function migrar(modo: "dry-run" | "ejecutar"): Promise<ResultadoMigracion>
           adjuntos_info,
           tipo,
           estado,
+          datos_extraidos,
           recibido_en,
           procesado_en
         )
@@ -244,15 +258,23 @@ async function migrar(modo: "dry-run" | "ejecutar"): Promise<ResultadoMigracion>
           ${JSON.stringify(adjuntos)}::jsonb,
           ${tipo}::tipo_email,
           'archivado'::estado_email,
+          ${JSON.stringify(datosLegacy)}::jsonb,
           ${fecha},
           NOW()
         )
-        ON CONFLICT (gmail_message_id) DO NOTHING
-        RETURNING id
+        ON CONFLICT (gmail_message_id) DO UPDATE SET
+          datos_extraidos = EXCLUDED.datos_extraidos,
+          updated_at = NOW()
+        RETURNING id, (xmax = 0) AS es_nuevo
       `;
 
       if (emailResult.length > 0) {
-        resultado.emails_insertados++;
+        const esNuevo = emailResult[0].es_nuevo as boolean;
+        if (esNuevo) {
+          resultado.emails_insertados++;
+        } else {
+          resultado.emails_duplicados++;
+        }
         const emailId = emailResult[0].id as string;
 
         // 5) Si es pedido con número detectado, crear entrada en pedidos
@@ -278,8 +300,6 @@ async function migrar(modo: "dry-run" | "ejecutar"): Promise<ResultadoMigracion>
           `;
           resultado.pedidos_extraidos++;
         }
-      } else {
-        resultado.emails_duplicados++;
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
