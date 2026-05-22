@@ -147,6 +147,9 @@ export default function DashboardPage() {
   const [respuestas, setRespuestas] = useState<RespuestaPendiente[]>([]);
   const [generandoIA, setGenerandoIA] = useState<string | null>(null);
   const [mostrarPruebas, setMostrarPruebas] = useState(false);
+  // Fuente de datos: "sheets" (Apps Script, sistema actual) o "postgres" (nueva BD).
+  // La preferencia se persiste en localStorage para que el usuario la conserve entre sesiones.
+  const [fuenteDatos, setFuenteDatos] = useState<"sheets" | "postgres">("sheets");
 
   const updateCell = useCallback(async (
     rowIndex: number,
@@ -199,11 +202,13 @@ export default function DashboardPage() {
     }
   }, [registros]);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async (fuente?: "sheets" | "postgres") => {
+    const fuenteActiva = fuente ?? fuenteDatos;
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/sheets");
+      const url = fuenteActiva === "postgres" ? "/api/registros-pg" : "/api/sheets";
+      const res = await fetch(url);
       const json = await res.json();
       if (json.error) {
         setError(json.error);
@@ -215,7 +220,26 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [fuenteDatos]);
+
+  // Cargar preferencia de fuente del localStorage al iniciar
+  useEffect(() => {
+    const guardada = typeof window !== "undefined"
+      ? localStorage.getItem("ap-coatings-fuente-datos")
+      : null;
+    if (guardada === "postgres" || guardada === "sheets") {
+      setFuenteDatos(guardada);
+    }
+  }, []);
+
+  // Alternar entre Sheets y Postgres (persiste en localStorage)
+  // El useEffect que depende de fuenteDatos disparará el fetch automáticamente.
+  const cambiarFuente = useCallback((nueva: "sheets" | "postgres") => {
+    setFuenteDatos(nueva);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("ap-coatings-fuente-datos", nueva);
+    }
+  }, []);
 
   const fetchRespuestas = async () => {
     try {
@@ -279,8 +303,13 @@ export default function DashboardPage() {
     }
   };
 
+  // Recarga datos cada vez que cambia la fuente (Sheets ↔ Postgres)
   useEffect(() => {
     fetchData();
+  }, [fetchData]);
+
+  // Polling de respuestas pendientes cada 30s (independiente de la fuente)
+  useEffect(() => {
     fetchRespuestas();
     const respuestasInterval = setInterval(fetchRespuestas, 30000);
     return () => {
@@ -367,7 +396,7 @@ export default function DashboardPage() {
             <h2 className="text-lg font-semibold">Error de conexion</h2>
             <p className="text-sm text-muted-foreground">{error}</p>
             <button
-              onClick={fetchData}
+              onClick={() => fetchData()}
               className="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm hover:opacity-90"
             >
               Reintentar
@@ -401,6 +430,34 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {/* Fuente de datos (Sheets vs Postgres) — para fase de migración */}
+            <div className="flex items-center rounded-md border overflow-hidden" title="Origen de los datos del dashboard">
+              <button
+                onClick={() => cambiarFuente("sheets")}
+                className={`flex items-center gap-1.5 px-3 py-2 text-xs transition-colors ${
+                  fuenteDatos === "sheets"
+                    ? "bg-blue-500 text-white"
+                    : "hover:bg-gray-50 text-gray-600"
+                }`}
+                title="Leer desde Google Sheets (sistema actual)"
+              >
+                <span>📄</span>
+                <span className="hidden sm:inline">Sheets</span>
+              </button>
+              <button
+                onClick={() => cambiarFuente("postgres")}
+                className={`flex items-center gap-1.5 px-3 py-2 text-xs transition-colors ${
+                  fuenteDatos === "postgres"
+                    ? "bg-emerald-600 text-white"
+                    : "hover:bg-gray-50 text-gray-600"
+                }`}
+                title="Leer desde PostgreSQL (sistema nuevo, en fase de validación)"
+              >
+                <span>🐘</span>
+                <span className="hidden sm:inline">Postgres</span>
+              </button>
+            </div>
+
             {/* View mode toggle */}
             <div className="flex items-center rounded-md border overflow-hidden">
               <button
@@ -445,7 +502,7 @@ export default function DashboardPage() {
               </button>
             )}
             <button
-              onClick={fetchData}
+              onClick={() => fetchData()}
               className="flex items-center gap-2 px-3 py-2 text-sm rounded-md border hover:bg-gray-50 transition-colors"
             >
               <RefreshCw className="h-4 w-4" />
