@@ -58,20 +58,44 @@ interface ResultadoMigracion {
 }
 
 async function leerHojaSheets(): Promise<FilaSheet[]> {
-  const baseUrl = process.env.VERCEL_URL
-    ? `https://${process.env.VERCEL_URL}`
-    : "https://ap-coatings-dashboard.vercel.app";
+  // Llamamos directamente al Apps Script (no a nuestro propio /api/sheets)
+  // para evitar problemas de protección de deployment entre funciones.
+  const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
+  if (!scriptUrl) {
+    throw new Error("GOOGLE_APPS_SCRIPT_URL no configurada");
+  }
 
-  const res = await fetch(`${baseUrl}/api/sheets`, {
-    cache: "no-store",
-  });
+  const res = await fetch(
+    `${scriptUrl}?accion=leerHoja&hoja=${encodeURIComponent("Hoja 1")}`,
+    { method: "GET", redirect: "follow", cache: "no-store" }
+  );
 
   if (!res.ok) {
-    throw new Error(`Error leyendo Sheets: ${res.status}`);
+    throw new Error(`Apps Script HTTP ${res.status}`);
   }
 
   const data = await res.json();
-  return (data.registros || []) as FilaSheet[];
+  if (!data.ok || !data.values) {
+    throw new Error(`Apps Script error: ${JSON.stringify(data).slice(0, 200)}`);
+  }
+
+  const rows: string[][] = data.values;
+  if (rows.length < 2) return [];
+
+  // Saltar la cabecera (rows[0]) y mapear a estructura
+  return rows.slice(1).map((row) => ({
+    fecha: row[0] ?? "",
+    quien: row[1] ?? "",
+    asunto: row[2] ?? "",
+    enlace: row[3] ?? "",
+    cuerpo: row[4] ?? "",
+    estado: row[5] ?? "",
+    tipo: row[6] ?? "",
+    prioridad: row[7] ?? "",
+    autoDropdown: row[8] ?? "",
+    respuestaAuto: row[9] ?? "",
+    telefono: row[10] ?? "",
+  }));
 }
 
 async function migrar(modo: "dry-run" | "ejecutar"): Promise<ResultadoMigracion> {
