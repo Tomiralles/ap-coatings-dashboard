@@ -19,11 +19,16 @@ import { google, gmail_v1 } from "googleapis";
 
 // Scopes que el Service Account está autorizado a usar para todos los
 // usuarios del dominio (configurado en Workspace Admin Console > DWD).
+//
+// NOTA IMPORTANTE: NO incluir "gmail.metadata" aquí. Aunque parece aditivo,
+// Gmail API lo trata como RESTRICTIVO: si se pide junto a readonly/modify,
+// fuerza que todas las llamadas devuelvan solo cabeceras y bloquea
+// `format: "full"` con el error «Metadata scope doesn't allow format FULL».
+// `gmail.readonly` ya da acceso a cabeceras + cuerpo + adjuntos.
 const GMAIL_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/gmail.modify",
   "https://www.googleapis.com/auth/gmail.send",
-  "https://www.googleapis.com/auth/gmail.metadata",
 ];
 
 interface ServiceAccountKey {
