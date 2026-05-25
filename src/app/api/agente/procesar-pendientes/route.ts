@@ -5,6 +5,14 @@ import { getGmailClient } from "@/lib/google-auth";
 import { clasificarEmail, EmailInput } from "@/lib/clasificador";
 
 /**
+ * Subir el timeout de la función a 60s (Vercel Hobby permite hasta 60s).
+ * Necesario porque, en el peor caso, podemos clasificar hasta 3 emails por
+ * cuenta × 4 cuentas en paralelo, y cada clasificación de Opus 4.7 tarda
+ * ~5-6 segundos.
+ */
+export const maxDuration = 60;
+
+/**
  * Cron de Shadow Mode (Fase 3).
  *
  * GET /api/agente/procesar-pendientes
@@ -46,8 +54,13 @@ const CUENTAS_A_PROCESAR = [
   "administracion@apcoatings.net",
 ];
 
-/** Número máximo de mensajes a inspeccionar por cuenta en cada ciclo. */
-const MAX_MENSAJES_POR_CUENTA = 5;
+/**
+ * Número máximo de mensajes a inspeccionar por cuenta en cada ciclo.
+ * Bajamos a 3 para que la latencia máxima por cuenta sea
+ * ~3 × 5.5s = 16s, dejando margen dentro del timeout de cron-job.org
+ * (30s en plan free) y del maxDuration de Vercel (60s).
+ */
+const MAX_MENSAJES_POR_CUENTA = 3;
 
 interface ResultadoPorCuenta {
   cuenta: string;
@@ -176,6 +189,215 @@ function verificarCronSecret(req: NextRequest): boolean {
     auth === expected;
 }
 
+/**
+ * Procesa una cuenta Gmail: lista N mensajes, salta los ya clasificados,
+ * y clasifica + guarda los nuevos.
+ *
+ * Esta función es totalmente independiente (no comparte estado mutable),
+ * por lo que se puede llamar a varias en paralelo con Promise.all sin
+ * problemas de race conditions.
+ */
+async function procesarCuenta(cuenta: string): Promise<ResultadoPorCuenta> {
+  const res: ResultadoPorCuenta = {
+    cuenta,
+    inspeccionados: 0,
+    procesados: 0,
+    saltados: 0,
+    errores: 0,
+    detalles: [],
+  };
+
+  let gmail: gmail_v1.Gmail;
+  try {
+    gmail = await getGmailClient(cuenta);
+  } catch (err) {
+    // Cuenta no autorizada por DWD (ej. abadpinturas@ está fuera del dominio)
+    res.detalles.push({
+      gmail_message_id: "(n/a)",
+      accion: "auth_falla",
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return res;
+  }
+
+  // 1. Listar los últimos N mensajes del INBOX
+  let listResp;
+  try {
+    listResp = await gmail.users.messages.list({
+      userId: "me",
+      labelIds: ["INBOX"],
+      maxResults: MAX_MENSAJES_POR_CUENTA,
+    });
+  } catch (err) {
+    res.errores++;
+    res.detalles.push({
+      gmail_message_id: "(list_falla)",
+      accion: "error",
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return res;
+  }
+
+  const mensajes = listResp.data.messages ?? [];
+  res.inspeccionados = mensajes.length;
+
+  // 2. Para cada mensaje, comprobar si ya está en BD; si no, clasificar
+  // (secuencial DENTRO de la cuenta para no martillear Anthropic API)
+  for (const m of mensajes) {
+    if (!m.id) continue;
+
+    // Comprobar duplicado por gmail_message_id
+    const yaExiste = await sql`
+      SELECT 1 FROM clasificaciones_agente
+      WHERE gmail_message_id = ${m.id}
+      LIMIT 1
+    `;
+    if (yaExiste.length > 0) {
+      res.saltados++;
+      res.detalles.push({
+        gmail_message_id: m.id,
+        accion: "saltado_ya_existe",
+      });
+      continue;
+    }
+
+    // Obtener mensaje completo
+    let msgResp;
+    try {
+      msgResp = await gmail.users.messages.get({
+        userId: "me",
+        id: m.id,
+        format: "full",
+      });
+    } catch (err) {
+      res.errores++;
+      res.detalles.push({
+        gmail_message_id: m.id,
+        accion: "error",
+        error: err instanceof Error ? err.message : String(err),
+      });
+      continue;
+    }
+
+    const headers = msgResp.data.payload?.headers;
+    const asunto = getHeader(headers, "subject");
+    const remitente = getHeader(headers, "from");
+    const fechaHdr = getHeader(headers, "date");
+    const fechaRecibida = fechaHdr ? new Date(fechaHdr) : new Date();
+    const fechaIso = isNaN(fechaRecibida.getTime())
+      ? new Date().toISOString()
+      : fechaRecibida.toISOString();
+
+    const cuerpo = extraerCuerpoTexto(msgResp.data.payload ?? undefined);
+    const { tiene_adjuntos, nombres: nombres_adjuntos } = extraerAdjuntos(
+      msgResp.data.payload ?? undefined
+    );
+
+    // Llamar al clasificador
+    const input: EmailInput = {
+      asunto,
+      remitente,
+      cuerpo,
+      tiene_adjuntos,
+      nombres_adjuntos,
+      fecha_recibido: fechaIso,
+    };
+
+    const resultado = await clasificarEmail(input);
+
+    if (!resultado.ok) {
+      res.errores++;
+      res.detalles.push({
+        gmail_message_id: m.id,
+        accion: "error",
+        error: resultado.error + (resultado.detalles ? ": " + resultado.detalles : ""),
+      });
+      continue;
+    }
+
+    // Guardar en Postgres
+    try {
+      const c = resultado.clasificacion;
+      const datosExtraidos = (c.datos_extraidos ?? {}) as Record<string, unknown>;
+
+      await sql`
+        INSERT INTO clasificaciones_agente (
+          gmail_message_id,
+          gmail_thread_id,
+          cuenta_destino,
+          asunto,
+          remitente,
+          fecha_recibido,
+          tiene_adjuntos,
+          nombres_adjuntos,
+          cuerpo_preview,
+          clasificacion,
+          tipo,
+          prioridad,
+          confianza,
+          accion_sugerida,
+          es_industriastak,
+          es_autoenvio_sql_pyme,
+          modelo,
+          input_tokens,
+          output_tokens,
+          cache_creation_input_tokens,
+          cache_read_input_tokens,
+          latencia_ms,
+          stop_reason,
+          coste_usd
+        )
+        VALUES (
+          ${m.id},
+          ${m.threadId ?? null},
+          ${cuenta},
+          ${asunto},
+          ${remitente},
+          ${fechaIso}::timestamptz,
+          ${tiene_adjuntos},
+          ${nombres_adjuntos},
+          ${cuerpo.slice(0, 500)},
+          ${JSON.stringify(c)}::jsonb,
+          ${(c.tipo as string) ?? null},
+          ${(c.prioridad as string) ?? null},
+          ${(c.confianza as number) ?? null},
+          ${(c.accion_sugerida as string) ?? null},
+          ${(c.es_industriastak as boolean) ?? false},
+          ${(datosExtraidos.es_autoenvio_sql_pyme as boolean) ?? false},
+          ${resultado.modelo},
+          ${resultado.uso.input_tokens},
+          ${resultado.uso.output_tokens},
+          ${resultado.uso.cache_creation_input_tokens},
+          ${resultado.uso.cache_read_input_tokens},
+          ${resultado.latencia_ms},
+          ${resultado.stop_reason ?? null},
+          ${resultado.coste_usd}
+        )
+        ON CONFLICT (gmail_message_id) DO NOTHING
+      `;
+
+      res.procesados++;
+      res.detalles.push({
+        gmail_message_id: m.id,
+        accion: "procesado",
+        tipo_clasificado: (c.tipo as string) ?? "?",
+        latencia_ms: resultado.latencia_ms,
+      });
+    } catch (err) {
+      res.errores++;
+      res.detalles.push({
+        gmail_message_id: m.id,
+        accion: "error",
+        error:
+          "Error al insertar en BD: " +
+          (err instanceof Error ? err.message : String(err)),
+      });
+    }
+  }
+
+  return res;
+}
+
 export async function GET(req: NextRequest) {
   // Verificar auth
   if (!verificarCronSecret(req)) {
@@ -190,209 +412,15 @@ export async function GET(req: NextRequest) {
   }
 
   const t0 = Date.now();
-  const porCuenta: ResultadoPorCuenta[] = [];
 
-  for (const cuenta of CUENTAS_A_PROCESAR) {
-    const res: ResultadoPorCuenta = {
-      cuenta,
-      inspeccionados: 0,
-      procesados: 0,
-      saltados: 0,
-      errores: 0,
-      detalles: [],
-    };
-
-    let gmail: gmail_v1.Gmail;
-    try {
-      gmail = await getGmailClient(cuenta);
-    } catch (err) {
-      // Cuenta no autorizada por DWD (ej. abadpinturas@ está fuera del dominio)
-      res.detalles.push({
-        gmail_message_id: "(n/a)",
-        accion: "auth_falla",
-        error: err instanceof Error ? err.message : String(err),
-      });
-      porCuenta.push(res);
-      continue;
-    }
-
-    // 1. Listar los últimos N mensajes del INBOX
-    let listResp;
-    try {
-      listResp = await gmail.users.messages.list({
-        userId: "me",
-        labelIds: ["INBOX"],
-        maxResults: MAX_MENSAJES_POR_CUENTA,
-      });
-    } catch (err) {
-      res.errores++;
-      res.detalles.push({
-        gmail_message_id: "(list_falla)",
-        accion: "error",
-        error: err instanceof Error ? err.message : String(err),
-      });
-      porCuenta.push(res);
-      continue;
-    }
-
-    const mensajes = listResp.data.messages ?? [];
-    res.inspeccionados = mensajes.length;
-
-    // 2. Para cada mensaje, comprobar si ya está en BD; si no, clasificar
-    for (const m of mensajes) {
-      if (!m.id) continue;
-
-      // Comprobar duplicado por gmail_message_id
-      const yaExiste = await sql`
-        SELECT 1 FROM clasificaciones_agente
-        WHERE gmail_message_id = ${m.id}
-        LIMIT 1
-      `;
-      if (yaExiste.length > 0) {
-        res.saltados++;
-        res.detalles.push({
-          gmail_message_id: m.id,
-          accion: "saltado_ya_existe",
-        });
-        continue;
-      }
-
-      // Obtener mensaje completo
-      let msgResp;
-      try {
-        msgResp = await gmail.users.messages.get({
-          userId: "me",
-          id: m.id,
-          format: "full",
-        });
-      } catch (err) {
-        res.errores++;
-        res.detalles.push({
-          gmail_message_id: m.id,
-          accion: "error",
-          error: err instanceof Error ? err.message : String(err),
-        });
-        continue;
-      }
-
-      const headers = msgResp.data.payload?.headers;
-      const asunto = getHeader(headers, "subject");
-      const remitente = getHeader(headers, "from");
-      const fechaHdr = getHeader(headers, "date");
-      const fechaRecibida = fechaHdr ? new Date(fechaHdr) : new Date();
-      const fechaIso = isNaN(fechaRecibida.getTime())
-        ? new Date().toISOString()
-        : fechaRecibida.toISOString();
-
-      const cuerpo = extraerCuerpoTexto(msgResp.data.payload ?? undefined);
-      const { tiene_adjuntos, nombres: nombres_adjuntos } = extraerAdjuntos(
-        msgResp.data.payload ?? undefined
-      );
-
-      // Llamar al clasificador
-      const input: EmailInput = {
-        asunto,
-        remitente,
-        cuerpo,
-        tiene_adjuntos,
-        nombres_adjuntos,
-        fecha_recibido: fechaIso,
-      };
-
-      const resultado = await clasificarEmail(input);
-
-      if (!resultado.ok) {
-        res.errores++;
-        res.detalles.push({
-          gmail_message_id: m.id,
-          accion: "error",
-          error: resultado.error + (resultado.detalles ? ": " + resultado.detalles : ""),
-        });
-        continue;
-      }
-
-      // Guardar en Postgres
-      try {
-        const c = resultado.clasificacion;
-        const datosExtraidos = (c.datos_extraidos ?? {}) as Record<string, unknown>;
-
-        await sql`
-          INSERT INTO clasificaciones_agente (
-            gmail_message_id,
-            gmail_thread_id,
-            cuenta_destino,
-            asunto,
-            remitente,
-            fecha_recibido,
-            tiene_adjuntos,
-            nombres_adjuntos,
-            cuerpo_preview,
-            clasificacion,
-            tipo,
-            prioridad,
-            confianza,
-            accion_sugerida,
-            es_industriastak,
-            es_autoenvio_sql_pyme,
-            modelo,
-            input_tokens,
-            output_tokens,
-            cache_creation_input_tokens,
-            cache_read_input_tokens,
-            latencia_ms,
-            stop_reason,
-            coste_usd
-          )
-          VALUES (
-            ${m.id},
-            ${m.threadId ?? null},
-            ${cuenta},
-            ${asunto},
-            ${remitente},
-            ${fechaIso}::timestamptz,
-            ${tiene_adjuntos},
-            ${nombres_adjuntos},
-            ${cuerpo.slice(0, 500)},
-            ${JSON.stringify(c)}::jsonb,
-            ${(c.tipo as string) ?? null},
-            ${(c.prioridad as string) ?? null},
-            ${(c.confianza as number) ?? null},
-            ${(c.accion_sugerida as string) ?? null},
-            ${(c.es_industriastak as boolean) ?? false},
-            ${(datosExtraidos.es_autoenvio_sql_pyme as boolean) ?? false},
-            ${resultado.modelo},
-            ${resultado.uso.input_tokens},
-            ${resultado.uso.output_tokens},
-            ${resultado.uso.cache_creation_input_tokens},
-            ${resultado.uso.cache_read_input_tokens},
-            ${resultado.latencia_ms},
-            ${resultado.stop_reason ?? null},
-            ${resultado.coste_usd}
-          )
-          ON CONFLICT (gmail_message_id) DO NOTHING
-        `;
-
-        res.procesados++;
-        res.detalles.push({
-          gmail_message_id: m.id,
-          accion: "procesado",
-          tipo_clasificado: (c.tipo as string) ?? "?",
-          latencia_ms: resultado.latencia_ms,
-        });
-      } catch (err) {
-        res.errores++;
-        res.detalles.push({
-          gmail_message_id: m.id,
-          accion: "error",
-          error:
-            "Error al insertar en BD: " +
-            (err instanceof Error ? err.message : String(err)),
-        });
-      }
-    }
-
-    porCuenta.push(res);
-  }
+  // Procesamos las cuentas en PARALELO con Promise.all. Cada cuenta es
+  // independiente (distinto cliente Gmail, distintos mensajes), así que
+  // pasar de 4 cuentas secuenciales a 4 paralelas reduce la latencia
+  // worst-case de ~4× a ~1×. Cada llamada a clasificarEmail() sigue siendo
+  // secuencial DENTRO de una cuenta para no martillear la API.
+  const porCuenta: ResultadoPorCuenta[] = await Promise.all(
+    CUENTAS_A_PROCESAR.map((cuenta) => procesarCuenta(cuenta))
+  );
 
   const totalProcesados = porCuenta.reduce((a, b) => a + b.procesados, 0);
   const totalSaltados = porCuenta.reduce((a, b) => a + b.saltados, 0);
