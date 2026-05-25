@@ -1,0 +1,429 @@
+import { NextRequest, NextResponse } from "next/server";
+import { gmail_v1 } from "googleapis";
+import { sql } from "@/lib/db";
+import { getGmailClient } from "@/lib/google-auth";
+import { clasificarEmail, EmailInput } from "@/lib/clasificador";
+
+/**
+ * Cron de Shadow Mode (Fase 3).
+ *
+ * GET /api/agente/procesar-pendientes
+ *
+ * Ejecutado automáticamente cada 5 minutos por Vercel Cron (vercel.json).
+ *
+ * Flujo:
+ *   1. Para cada cuenta vigilada:
+ *      a. Pedir a Gmail los últimos N mensajes del INBOX
+ *      b. Por cada mensaje:
+ *         - Si ya está en clasificaciones_agente → saltar
+ *         - Si no:
+ *            • Obtener metadatos + cuerpo + adjuntos
+ *            • Llamar al clasificador
+ *            • Guardar resultado en Postgres
+ *
+ * Idempotente: se puede ejecutar todas las veces que sea. La UNIQUE
+ * constraint en `gmail_message_id` evita duplicados.
+ *
+ * Seguridad: requiere header `Authorization: Bearer <CRON_SECRET>`.
+ * Vercel inyecta este header automáticamente en los crons configurados
+ * en vercel.json. Las llamadas manuales también deben llevarlo.
+ *
+ * Respuesta:
+ * {
+ *   ok: true,
+ *   procesados: 3,
+ *   saltados: 17,           // ya estaban en BD
+ *   errores: 0,
+ *   por_cuenta: { ... },
+ *   latencia_total_ms: 12345
+ * }
+ */
+
+const CUENTAS_A_PROCESAR = [
+  "abadpinturas@abadpinturas.com",
+  "ventas@apcoatings.net",
+  "logistica@apcoatings.net",
+  "administracion@apcoatings.net",
+];
+
+/** Número máximo de mensajes a inspeccionar por cuenta en cada ciclo. */
+const MAX_MENSAJES_POR_CUENTA = 5;
+
+interface ResultadoPorCuenta {
+  cuenta: string;
+  inspeccionados: number;
+  procesados: number;
+  saltados: number;
+  errores: number;
+  detalles: Array<{
+    gmail_message_id: string;
+    accion: "procesado" | "saltado_ya_existe" | "error" | "auth_falla";
+    tipo_clasificado?: string;
+    error?: string;
+    latencia_ms?: number;
+  }>;
+}
+
+/**
+ * Decodifica el cuerpo de un mensaje Gmail (los bodies vienen en
+ * base64url, repartidos en una jerarquía de "parts").
+ */
+function extraerCuerpoTexto(
+  payload: gmail_v1.Schema$MessagePart | undefined
+): string {
+  if (!payload) return "";
+
+  // Caso 1: parte simple con body.data
+  if (payload.body?.data) {
+    try {
+      return Buffer.from(payload.body.data, "base64url").toString("utf-8");
+    } catch {
+      return "";
+    }
+  }
+
+  // Caso 2: multipart — buscar text/plain primero, luego text/html
+  const parts = payload.parts ?? [];
+  let textoPlano = "";
+  let textoHtml = "";
+
+  for (const part of parts) {
+    if (part.mimeType === "text/plain" && part.body?.data) {
+      try {
+        textoPlano += Buffer.from(part.body.data, "base64url").toString("utf-8");
+      } catch {
+        /* ignore */
+      }
+    } else if (part.mimeType === "text/html" && part.body?.data) {
+      try {
+        textoHtml += Buffer.from(part.body.data, "base64url").toString("utf-8");
+      } catch {
+        /* ignore */
+      }
+    } else if (part.parts) {
+      // recursivo (multipart/alternative dentro de multipart/mixed, etc.)
+      const subTexto = extraerCuerpoTexto(part);
+      if (subTexto) textoPlano += subTexto;
+    }
+  }
+
+  if (textoPlano) return textoPlano;
+
+  // Fallback: limpiar HTML básico (eliminar tags)
+  if (textoHtml) {
+    return textoHtml
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  return "";
+}
+
+/**
+ * Extrae los nombres de adjuntos del payload del mensaje.
+ */
+function extraerAdjuntos(payload: gmail_v1.Schema$MessagePart | undefined): {
+  tiene_adjuntos: boolean;
+  nombres: string[];
+} {
+  const nombres: string[] = [];
+
+  function recurse(part: gmail_v1.Schema$MessagePart | undefined) {
+    if (!part) return;
+    if (part.filename && part.filename.length > 0 && part.body?.attachmentId) {
+      nombres.push(part.filename);
+    }
+    if (part.parts) {
+      for (const p of part.parts) recurse(p);
+    }
+  }
+
+  recurse(payload);
+
+  return { tiene_adjuntos: nombres.length > 0, nombres };
+}
+
+/**
+ * Obtiene el valor de un header concreto (case-insensitive).
+ */
+function getHeader(
+  headers: gmail_v1.Schema$MessagePartHeader[] | undefined,
+  name: string
+): string {
+  if (!headers) return "";
+  const h = headers.find((h) => h.name?.toLowerCase() === name.toLowerCase());
+  return h?.value ?? "";
+}
+
+function verificarCronSecret(req: NextRequest): boolean {
+  // En desarrollo local: SKIP_CRON_AUTH=true permite llamar sin token
+  if (process.env.SKIP_CRON_AUTH === "true") return true;
+
+  const auth = req.headers.get("authorization");
+  if (!auth) return false;
+
+  const expected = `Bearer ${process.env.CRON_SECRET ?? ""}`;
+  return process.env.CRON_SECRET !== undefined &&
+    process.env.CRON_SECRET.length > 0 &&
+    auth === expected;
+}
+
+export async function GET(req: NextRequest) {
+  // Verificar auth
+  if (!verificarCronSecret(req)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error:
+          "Unauthorized. Falta header 'Authorization: Bearer <CRON_SECRET>' o el secreto no coincide.",
+      },
+      { status: 401 }
+    );
+  }
+
+  const t0 = Date.now();
+  const porCuenta: ResultadoPorCuenta[] = [];
+
+  for (const cuenta of CUENTAS_A_PROCESAR) {
+    const res: ResultadoPorCuenta = {
+      cuenta,
+      inspeccionados: 0,
+      procesados: 0,
+      saltados: 0,
+      errores: 0,
+      detalles: [],
+    };
+
+    let gmail: gmail_v1.Gmail;
+    try {
+      gmail = await getGmailClient(cuenta);
+    } catch (err) {
+      // Cuenta no autorizada por DWD (ej. abadpinturas@ está fuera del dominio)
+      res.detalles.push({
+        gmail_message_id: "(n/a)",
+        accion: "auth_falla",
+        error: err instanceof Error ? err.message : String(err),
+      });
+      porCuenta.push(res);
+      continue;
+    }
+
+    // 1. Listar los últimos N mensajes del INBOX
+    let listResp;
+    try {
+      listResp = await gmail.users.messages.list({
+        userId: "me",
+        labelIds: ["INBOX"],
+        maxResults: MAX_MENSAJES_POR_CUENTA,
+      });
+    } catch (err) {
+      res.errores++;
+      res.detalles.push({
+        gmail_message_id: "(list_falla)",
+        accion: "error",
+        error: err instanceof Error ? err.message : String(err),
+      });
+      porCuenta.push(res);
+      continue;
+    }
+
+    const mensajes = listResp.data.messages ?? [];
+    res.inspeccionados = mensajes.length;
+
+    // 2. Para cada mensaje, comprobar si ya está en BD; si no, clasificar
+    for (const m of mensajes) {
+      if (!m.id) continue;
+
+      // Comprobar duplicado por gmail_message_id
+      const yaExiste = await sql`
+        SELECT 1 FROM clasificaciones_agente
+        WHERE gmail_message_id = ${m.id}
+        LIMIT 1
+      `;
+      if (yaExiste.length > 0) {
+        res.saltados++;
+        res.detalles.push({
+          gmail_message_id: m.id,
+          accion: "saltado_ya_existe",
+        });
+        continue;
+      }
+
+      // Obtener mensaje completo
+      let msgResp;
+      try {
+        msgResp = await gmail.users.messages.get({
+          userId: "me",
+          id: m.id,
+          format: "full",
+        });
+      } catch (err) {
+        res.errores++;
+        res.detalles.push({
+          gmail_message_id: m.id,
+          accion: "error",
+          error: err instanceof Error ? err.message : String(err),
+        });
+        continue;
+      }
+
+      const headers = msgResp.data.payload?.headers;
+      const asunto = getHeader(headers, "subject");
+      const remitente = getHeader(headers, "from");
+      const fechaHdr = getHeader(headers, "date");
+      const fechaRecibida = fechaHdr ? new Date(fechaHdr) : new Date();
+      const fechaIso = isNaN(fechaRecibida.getTime())
+        ? new Date().toISOString()
+        : fechaRecibida.toISOString();
+
+      const cuerpo = extraerCuerpoTexto(msgResp.data.payload ?? undefined);
+      const { tiene_adjuntos, nombres: nombres_adjuntos } = extraerAdjuntos(
+        msgResp.data.payload ?? undefined
+      );
+
+      // Llamar al clasificador
+      const input: EmailInput = {
+        asunto,
+        remitente,
+        cuerpo,
+        tiene_adjuntos,
+        nombres_adjuntos,
+        fecha_recibido: fechaIso,
+      };
+
+      const resultado = await clasificarEmail(input);
+
+      if (!resultado.ok) {
+        res.errores++;
+        res.detalles.push({
+          gmail_message_id: m.id,
+          accion: "error",
+          error: resultado.error + (resultado.detalles ? ": " + resultado.detalles : ""),
+        });
+        continue;
+      }
+
+      // Guardar en Postgres
+      try {
+        const c = resultado.clasificacion;
+        const datosExtraidos = (c.datos_extraidos ?? {}) as Record<string, unknown>;
+
+        await sql`
+          INSERT INTO clasificaciones_agente (
+            gmail_message_id,
+            gmail_thread_id,
+            cuenta_destino,
+            asunto,
+            remitente,
+            fecha_recibido,
+            tiene_adjuntos,
+            nombres_adjuntos,
+            cuerpo_preview,
+            clasificacion,
+            tipo,
+            prioridad,
+            confianza,
+            accion_sugerida,
+            es_industriastak,
+            es_autoenvio_sql_pyme,
+            modelo,
+            input_tokens,
+            output_tokens,
+            cache_creation_input_tokens,
+            cache_read_input_tokens,
+            latencia_ms,
+            stop_reason,
+            coste_usd
+          )
+          VALUES (
+            ${m.id},
+            ${m.threadId ?? null},
+            ${cuenta},
+            ${asunto},
+            ${remitente},
+            ${fechaIso}::timestamptz,
+            ${tiene_adjuntos},
+            ${nombres_adjuntos},
+            ${cuerpo.slice(0, 500)},
+            ${JSON.stringify(c)}::jsonb,
+            ${(c.tipo as string) ?? null},
+            ${(c.prioridad as string) ?? null},
+            ${(c.confianza as number) ?? null},
+            ${(c.accion_sugerida as string) ?? null},
+            ${(c.es_industriastak as boolean) ?? false},
+            ${(datosExtraidos.es_autoenvio_sql_pyme as boolean) ?? false},
+            ${resultado.modelo},
+            ${resultado.uso.input_tokens},
+            ${resultado.uso.output_tokens},
+            ${resultado.uso.cache_creation_input_tokens},
+            ${resultado.uso.cache_read_input_tokens},
+            ${resultado.latencia_ms},
+            ${resultado.stop_reason ?? null},
+            ${resultado.coste_usd}
+          )
+          ON CONFLICT (gmail_message_id) DO NOTHING
+        `;
+
+        res.procesados++;
+        res.detalles.push({
+          gmail_message_id: m.id,
+          accion: "procesado",
+          tipo_clasificado: (c.tipo as string) ?? "?",
+          latencia_ms: resultado.latencia_ms,
+        });
+      } catch (err) {
+        res.errores++;
+        res.detalles.push({
+          gmail_message_id: m.id,
+          accion: "error",
+          error:
+            "Error al insertar en BD: " +
+            (err instanceof Error ? err.message : String(err)),
+        });
+      }
+    }
+
+    porCuenta.push(res);
+  }
+
+  const totalProcesados = porCuenta.reduce((a, b) => a + b.procesados, 0);
+  const totalSaltados = porCuenta.reduce((a, b) => a + b.saltados, 0);
+  const totalErrores = porCuenta.reduce((a, b) => a + b.errores, 0);
+
+  // Registrar el ciclo en eventos para auditoría
+  await sql`
+    INSERT INTO eventos (tipo, nivel, mensaje, detalles, ejecutado_por)
+    VALUES (
+      'agente_procesar_pendientes',
+      ${totalErrores > 0 ? "warning" : "info"},
+      ${`Cron shadow mode: ${totalProcesados} procesados, ${totalSaltados} saltados, ${totalErrores} errores`},
+      ${JSON.stringify({
+        total_procesados: totalProcesados,
+        total_saltados: totalSaltados,
+        total_errores: totalErrores,
+        por_cuenta: porCuenta,
+        latencia_total_ms: Date.now() - t0,
+      })}::jsonb,
+      'cron'
+    )
+  `.catch((err) => {
+    console.error("[procesar-pendientes] No se pudo registrar evento:", err);
+  });
+
+  return NextResponse.json({
+    ok: true,
+    procesados: totalProcesados,
+    saltados: totalSaltados,
+    errores: totalErrores,
+    latencia_total_ms: Date.now() - t0,
+    por_cuenta: porCuenta,
+  });
+}
