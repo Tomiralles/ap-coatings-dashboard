@@ -75,6 +75,41 @@ interface RegistroConIdx extends Registro {
   _idx: number;
 }
 
+// ─── Pestaña "Agente IA" (shadow mode Fase 3) ──────────────────────────
+interface ClasificacionAgente {
+  id: number;
+  created_at: string;
+  cuenta_destino: string;
+  asunto: string | null;
+  remitente: string | null;
+  fecha_recibido: string | null;
+  tipo: string | null;
+  prioridad: string | null;
+  confianza: number | null;
+  accion_sugerida: string | null;
+  es_industriastak: boolean;
+  es_autoenvio_sql_pyme: boolean;
+  cuerpo_preview: string | null;
+  modelo: string;
+  coste_usd: number | string | null;
+  latencia_ms: number | null;
+}
+
+interface StatsAgente {
+  total: number;
+  hoy: number;
+  semana: number;
+  vip: number;
+  sql_pyme: number;
+  escalados: number;
+  prio_alta: number;
+  coste_total_usd: number | string;
+  coste_hoy_usd: number | string;
+  latencia_media_ms: number | string;
+  modelo_actual: string | null;
+  ultima_clasificacion: string | null;
+}
+
 function limpiarNombre(raw: string): string {
   if (!raw) return "—";
   return raw
@@ -147,6 +182,13 @@ export default function DashboardPage() {
   const [respuestas, setRespuestas] = useState<RespuestaPendiente[]>([]);
   const [generandoIA, setGenerandoIA] = useState<string | null>(null);
   const [mostrarPruebas, setMostrarPruebas] = useState(false);
+
+  // ─── Estado de la pestaña "Agente IA" ────────────────────────────────
+  const [clasificacionesAgente, setClasificacionesAgente] = useState<ClasificacionAgente[]>([]);
+  const [statsAgente, setStatsAgente] = useState<StatsAgente | null>(null);
+  const [loadingAgente, setLoadingAgente] = useState(false);
+  const [filtroTipoAgente, setFiltroTipoAgente] = useState<string>("todos");
+  const [filtroCuentaAgente, setFiltroCuentaAgente] = useState<string>("todas");
   // Fuente de datos: "sheets" (Apps Script, sistema actual) o "postgres" (nueva BD).
   // La preferencia se persiste en localStorage para que el usuario la conserve entre sesiones.
   const [fuenteDatos, setFuenteDatos] = useState<"sheets" | "postgres">("sheets");
@@ -249,6 +291,22 @@ export default function DashboardPage() {
     } catch { /* silencioso */ }
   };
 
+  // Trae las clasificaciones del agente desde Postgres
+  const fetchClasificacionesAgente = useCallback(async () => {
+    setLoadingAgente(true);
+    try {
+      const res = await fetch("/api/agente/clasificaciones?limit=200");
+      const json = await res.json();
+      if (json.ok) {
+        setClasificacionesAgente(json.filas ?? []);
+        setStatsAgente(json.stats ?? null);
+      }
+    } catch { /* silencioso */ }
+    finally {
+      setLoadingAgente(false);
+    }
+  }, []);
+
   const generarRespuesta = async (
     rowIndex: number,
     tipo: "email" | "whatsapp",
@@ -316,6 +374,14 @@ export default function DashboardPage() {
       clearInterval(respuestasInterval);
     };
   }, []);
+
+  // Pestaña Agente IA: traer datos al activarla y refrescar cada 30s
+  useEffect(() => {
+    if (activeTab !== "agente") return;
+    fetchClasificacionesAgente();
+    const interval = setInterval(fetchClasificacionesAgente, 30000);
+    return () => clearInterval(interval);
+  }, [activeTab, fetchClasificacionesAgente]);
 
   // Registros sin entradas de prueba (filtro base)
   const registrosBase = useMemo(() => {
@@ -667,11 +733,15 @@ export default function DashboardPage() {
 
           <Tabs value={activeTab} onValueChange={setActiveTab}>
             <div className="px-6">
-              <TabsList className="grid w-full max-w-md grid-cols-4">
+              <TabsList className="grid w-full max-w-2xl grid-cols-5">
                 <TabsTrigger value="todo">Todo ({registrosBase.length})</TabsTrigger>
                 <TabsTrigger value="pedidos">Pedidos ({stats.pedidos.length})</TabsTrigger>
                 <TabsTrigger value="facturas">Facturas ({stats.facturas.length})</TabsTrigger>
                 <TabsTrigger value="consultas">Consultas ({stats.consultas.length})</TabsTrigger>
+                <TabsTrigger value="agente" className="gap-1.5">
+                  <Bot className="h-3.5 w-3.5" />
+                  Agente IA ({statsAgente?.total ?? 0})
+                </TabsTrigger>
               </TabsList>
             </div>
 
@@ -860,9 +930,291 @@ export default function DashboardPage() {
                 )}
               </TabsContent>
             ))}
+
+            {/* ─── Pestaña "Agente IA" (Shadow Mode) ─── */}
+            <TabsContent value="agente" className="mt-0">
+              <PestanaAgenteIA
+                clasificaciones={clasificacionesAgente}
+                stats={statsAgente}
+                loading={loadingAgente}
+                onRefrescar={fetchClasificacionesAgente}
+                filtroTipo={filtroTipoAgente}
+                setFiltroTipo={setFiltroTipoAgente}
+                filtroCuenta={filtroCuentaAgente}
+                setFiltroCuenta={setFiltroCuentaAgente}
+              />
+            </TabsContent>
           </Tabs>
         </Card>
       </main>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Componente: Pestaña "Agente IA"
+// Muestra las clasificaciones del agente Claude en shadow mode + stats
+// ──────────────────────────────────────────────────────────────────────
+
+const TIPO_AGENTE_COLOR: Record<string, string> = {
+  pedido_cliente: "bg-orange-100 text-orange-700 border-orange-200",
+  pedido_cliente_telefono: "bg-orange-100 text-orange-700 border-orange-200",
+  factura_proveedor: "bg-violet-100 text-violet-700 border-violet-200",
+  factura_cliente: "bg-violet-100 text-violet-700 border-violet-200",
+  consulta_comercial: "bg-cyan-100 text-cyan-700 border-cyan-200",
+  estado_pedido: "bg-blue-100 text-blue-700 border-blue-200",
+  muestra_cliente: "bg-emerald-100 text-emerald-700 border-emerald-200",
+  reclamacion: "bg-red-100 text-red-700 border-red-200",
+  albaran: "bg-amber-100 text-amber-700 border-amber-200",
+  otro: "bg-gray-100 text-gray-600 border-gray-200",
+};
+
+const PRIORIDAD_COLOR: Record<string, string> = {
+  alta: "bg-red-100 text-red-700 border-red-200",
+  media: "bg-yellow-100 text-yellow-700 border-yellow-200",
+  baja: "bg-gray-100 text-gray-600 border-gray-200",
+};
+
+function formatHora(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "—";
+  const ahora = new Date();
+  const esMismoDia = d.toDateString() === ahora.toDateString();
+  if (esMismoDia) {
+    return d.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
+  }
+  return d.toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit" }) +
+    " " + d.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
+}
+
+function cuentaCorta(cuenta: string): string {
+  // ventas@apcoatings.net → "ventas"
+  return cuenta.split("@")[0] || cuenta;
+}
+
+function PestanaAgenteIA({
+  clasificaciones,
+  stats,
+  loading,
+  onRefrescar,
+  filtroTipo,
+  setFiltroTipo,
+  filtroCuenta,
+  setFiltroCuenta,
+}: {
+  clasificaciones: ClasificacionAgente[];
+  stats: StatsAgente | null;
+  loading: boolean;
+  onRefrescar: () => void;
+  filtroTipo: string;
+  setFiltroTipo: (v: string) => void;
+  filtroCuenta: string;
+  setFiltroCuenta: (v: string) => void;
+}) {
+  // Aplicar filtros locales
+  const filtradas = clasificaciones.filter((c) => {
+    if (filtroTipo !== "todos" && c.tipo !== filtroTipo) return false;
+    if (filtroCuenta !== "todas" && c.cuenta_destino !== filtroCuenta) return false;
+    return true;
+  });
+
+  // Listas únicas para los selectores
+  const tiposUnicos = Array.from(
+    new Set(clasificaciones.map((c) => c.tipo).filter(Boolean))
+  ) as string[];
+  const cuentasUnicas = Array.from(
+    new Set(clasificaciones.map((c) => c.cuenta_destino))
+  );
+
+  return (
+    <CardContent className="space-y-4 p-6">
+      {/* Banner explicativo de shadow mode */}
+      <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
+        <div className="flex items-start gap-2">
+          <Bot className="h-4 w-4 text-amber-700 mt-0.5" />
+          <div>
+            <strong className="text-amber-900">Shadow Mode activo.</strong>{" "}
+            <span className="text-amber-800">
+              El agente Claude clasifica todos los emails entrantes en silencio (sin actuar)
+              para validar precisión durante 2 semanas. No interfiere con el sistema actual.
+              Modelo en uso: <code className="bg-amber-100 px-1 rounded">{stats?.modelo_actual ?? "—"}</code>
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Tarjetas de stats */}
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+        <StatCard label="Hoy" valor={stats?.hoy ?? 0} hint={`${stats?.semana ?? 0} esta semana`} />
+        <StatCard label="Total" valor={stats?.total ?? 0} />
+        <StatCard label="VIP Industriastak" valor={stats?.vip ?? 0} color="text-amber-700" />
+        <StatCard label="Autoenvíos SQL" valor={stats?.sql_pyme ?? 0} color="text-blue-700" />
+        <StatCard label="Escalados a Toni" valor={stats?.escalados ?? 0} color="text-red-700" />
+        <StatCard
+          label="Coste hoy"
+          valor={`$${Number(stats?.coste_hoy_usd ?? 0).toFixed(4)}`}
+          hint={`$${Number(stats?.coste_total_usd ?? 0).toFixed(2)} total`}
+        />
+      </div>
+
+      {/* Filtros + refrescar */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Select value={filtroCuenta} onValueChange={setFiltroCuenta}>
+          <SelectTrigger className="w-[180px] h-9">
+            <SelectValue placeholder="Cuenta" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="todas">Todas las cuentas</SelectItem>
+            {cuentasUnicas.map((c) => (
+              <SelectItem key={c} value={c}>{cuentaCorta(c)}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Select value={filtroTipo} onValueChange={setFiltroTipo}>
+          <SelectTrigger className="w-[180px] h-9">
+            <SelectValue placeholder="Tipo" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="todos">Todos los tipos</SelectItem>
+            {tiposUnicos.map((t) => (
+              <SelectItem key={t} value={t}>{t}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <button
+          type="button"
+          onClick={onRefrescar}
+          disabled={loading}
+          className="inline-flex items-center gap-1.5 h-9 px-3 rounded-md border border-gray-200 bg-white hover:bg-gray-50 text-sm disabled:opacity-50"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+          Refrescar
+        </button>
+
+        <span className="ml-auto text-xs text-muted-foreground">
+          {filtradas.length} de {clasificaciones.length} clasificaciones
+          {stats?.latencia_media_ms ? ` · ${stats.latencia_media_ms}ms media` : ""}
+        </span>
+      </div>
+
+      {/* Tabla */}
+      <div className="rounded-md border overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow className="bg-gray-50/50">
+              <TableHead className="w-[90px]">Hora</TableHead>
+              <TableHead className="w-[100px]">Cuenta</TableHead>
+              <TableHead>Asunto</TableHead>
+              <TableHead className="w-[160px]">Tipo</TableHead>
+              <TableHead className="w-[90px]">Prioridad</TableHead>
+              <TableHead className="w-[80px]">Confianza</TableHead>
+              <TableHead className="w-[100px]">Flags</TableHead>
+              <TableHead className="w-[140px]">Acción sugerida</TableHead>
+              <TableHead className="w-[80px] text-right">Coste</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {filtradas.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={9} className="h-24 text-center text-muted-foreground">
+                  {loading ? "Cargando clasificaciones..." : "Sin clasificaciones todavía. El cron se ejecuta cada 5 min."}
+                </TableCell>
+              </TableRow>
+            ) : (
+              filtradas.map((c) => {
+                const tipoColor = TIPO_AGENTE_COLOR[c.tipo ?? ""] ?? TIPO_AGENTE_COLOR.otro;
+                const prioColor = PRIORIDAD_COLOR[c.prioridad ?? "baja"] ?? PRIORIDAD_COLOR.baja;
+                const conf = c.confianza != null ? Number(c.confianza) : null;
+                const confPct = conf != null ? Math.round(conf * 100) : null;
+                const coste = c.coste_usd != null ? Number(c.coste_usd) : null;
+
+                return (
+                  <TableRow key={c.id} className="hover:bg-amber-50/30">
+                    <TableCell className="text-xs text-muted-foreground whitespace-nowrap font-mono">
+                      {formatHora(c.created_at)}
+                    </TableCell>
+                    <TableCell className="text-xs">
+                      <span className="font-medium">{cuentaCorta(c.cuenta_destino)}</span>
+                    </TableCell>
+                    <TableCell className="text-sm max-w-[300px]">
+                      <div className="truncate font-medium" title={c.asunto ?? ""}>
+                        {c.asunto ?? "(sin asunto)"}
+                      </div>
+                      <div className="truncate text-xs text-muted-foreground" title={c.remitente ?? ""}>
+                        {limpiarNombre(c.remitente ?? "")}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className={`${tipoColor} text-xs font-normal`}>
+                        {c.tipo ?? "—"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className={`${prioColor} text-xs font-normal capitalize`}>
+                        {c.prioridad ?? "—"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      {confPct != null ? (
+                        <span className={`text-xs font-mono ${
+                          confPct >= 90 ? "text-emerald-600" :
+                          confPct >= 75 ? "text-amber-600" : "text-red-600"
+                        }`}>
+                          {confPct}%
+                        </span>
+                      ) : "—"}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex gap-1">
+                        {c.es_industriastak && (
+                          <Badge variant="outline" className="bg-amber-100 text-amber-700 border-amber-200 text-xs">
+                            VIP
+                          </Badge>
+                        )}
+                        {c.es_autoenvio_sql_pyme && (
+                          <Badge variant="outline" className="bg-blue-100 text-blue-700 border-blue-200 text-xs">
+                            SQL
+                          </Badge>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {c.accion_sugerida ?? "—"}
+                    </TableCell>
+                    <TableCell className="text-right text-xs font-mono text-muted-foreground">
+                      {coste != null ? `$${coste.toFixed(4)}` : "—"}
+                    </TableCell>
+                  </TableRow>
+                );
+              })
+            )}
+          </TableBody>
+        </Table>
+      </div>
+    </CardContent>
+  );
+}
+
+// Tarjeta de estadística reusable para la cabecera del agente
+function StatCard({
+  label,
+  valor,
+  hint,
+  color,
+}: {
+  label: string;
+  valor: string | number;
+  hint?: string;
+  color?: string;
+}) {
+  return (
+    <div className="rounded-md border bg-white px-3 py-2">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className={`text-lg font-semibold ${color ?? "text-gray-900"}`}>{valor}</div>
+      {hint && <div className="text-[10px] text-muted-foreground">{hint}</div>}
     </div>
   );
 }
