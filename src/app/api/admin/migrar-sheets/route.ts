@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { sqlDirect } from "@/lib/db";
 import {
   parsearQuien,
@@ -11,21 +11,45 @@ import {
 } from "@/lib/migracion-helpers";
 
 /**
- * Migración histórica de Google Sheets → PostgreSQL (Neon).
+ * Sincronización Sheets → PostgreSQL (Neon).
  *
  * Lee todas las filas de "Hoja 1" via Apps Script y las inserta en las
  * tablas correspondientes de Postgres: clientes, emails y pedidos.
  *
  * Es IDEMPOTENTE: si se ejecuta varias veces, no duplica filas
  * (usa UPSERT por email para clientes y por gmail_message_id para emails).
+ * Esto permite ejecutarla periódicamente para mantener Postgres en sync
+ * con Sheets durante el shadow mode (hasta que en Fase 4 el agente escriba
+ * directamente y prescindamos de Apps Script).
  *
  * Modos:
  *   GET  → modo dry-run: muestra qué pasaría sin tocar Postgres
- *   POST → ejecuta la migración real
+ *           (público; no modifica nada, útil para diagnóstico)
+ *   POST → ejecuta la migración/sync real
+ *           (PROTEGIDO con Authorization: Bearer CRON_SECRET)
  *
- * Endpoint protegido: solo accesible si llega con el header
- * X-Migration-Token correcto (variable de entorno MIGRATION_TOKEN).
+ * Llamada habitual: cron-job.org cada hora con el header
+ *   `Authorization: Bearer <CRON_SECRET>`
  */
+
+/**
+ * La migración puede tardar 20-50s con muchas filas (lee de Apps Script
+ * + procesa fila a fila + upserts contra Postgres). Subimos el timeout
+ * de la función al máximo de Vercel Hobby (60s).
+ */
+export const maxDuration = 60;
+
+function verificarCronSecret(req: NextRequest): boolean {
+  if (process.env.SKIP_CRON_AUTH === "true") return true;
+  const auth = req.headers.get("authorization");
+  if (!auth) return false;
+  const expected = `Bearer ${process.env.CRON_SECRET ?? ""}`;
+  return (
+    process.env.CRON_SECRET !== undefined &&
+    process.env.CRON_SECRET.length > 0 &&
+    auth === expected
+  );
+}
 
 // Tipos para los datos crudos del Sheet
 interface FilaSheet {
@@ -332,7 +356,20 @@ export async function GET() {
   }
 }
 
-export async function POST() {
+export async function POST(req: NextRequest) {
+  // Verificar auth (Bearer CRON_SECRET) para evitar que cualquiera
+  // dispare la sincronización completa contra Postgres.
+  if (!verificarCronSecret(req)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error:
+          "Unauthorized. Falta header 'Authorization: Bearer <CRON_SECRET>' o el secreto no coincide.",
+      },
+      { status: 401 }
+    );
+  }
+
   // Modo ejecutar: hace los inserts/upserts reales
   try {
     const r = await migrar("ejecutar");
