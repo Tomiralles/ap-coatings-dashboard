@@ -4,6 +4,7 @@ import {
   getServiceAccountEmail,
   getServiceAccountProjectId,
 } from "@/lib/google-auth";
+import { CUENTAS_VIGILADAS } from "@/lib/cuentas-vigiladas";
 
 /**
  * Endpoint de verificación: comprueba que el Service Account + DWD
@@ -22,12 +23,9 @@ import {
  *  - Los scopes autorizados son los correctos
  */
 
-const CUENTAS_A_VERIFICAR = [
-  "abadpinturas@abadpinturas.com",
-  "ventas@apcoatings.net",
-  "logistica@apcoatings.net",
-  "administracion@apcoatings.net",
-];
+// Lista centralizada (ver src/lib/cuentas-vigiladas.ts).
+// Si quieres añadir más cuentas para diagnóstico, edítalo allí.
+const CUENTAS_A_VERIFICAR = CUENTAS_VIGILADAS;
 
 export async function GET() {
   const resultados: Array<{

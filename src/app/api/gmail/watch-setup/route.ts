@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getGmailClient, getServiceAccountProjectId } from "@/lib/google-auth";
 import { sql } from "@/lib/db";
+import { CUENTAS_VIGILADAS } from "@/lib/cuentas-vigiladas";
 
 /**
  * Endpoint admin para activar las suscripciones Watch en las 4 cuentas Gmail.
@@ -21,12 +22,9 @@ import { sql } from "@/lib/db";
  * y la sustituye (Gmail solo permite una watch por usuario).
  */
 
-const CUENTAS_A_VIGILAR = [
-  "abadpinturas@abadpinturas.com",
-  "ventas@apcoatings.net",
-  "logistica@apcoatings.net",
-  "administracion@apcoatings.net",
-];
+// Lista centralizada (ver src/lib/cuentas-vigiladas.ts).
+// Antes era una copia manual de 4 alias; ahora solo tomiralles@.
+const CUENTAS_A_VIGILAR = CUENTAS_VIGILADAS;
 
 const TOPIC_NAME = "gmail-notifications";
 

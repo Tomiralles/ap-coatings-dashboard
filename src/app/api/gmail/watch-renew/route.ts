@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getGmailClient, getServiceAccountProjectId } from "@/lib/google-auth";
 import { sql } from "@/lib/db";
+import { CUENTAS_VIGILADAS } from "@/lib/cuentas-vigiladas";
 
 /**
  * Endpoint para renovar las Gmail Watches automáticamente.
@@ -17,12 +18,10 @@ import { sql } from "@/lib/db";
  * el endpoint (es idempotente y no peligroso, pero mejor protegerlo).
  */
 
-const CUENTAS_A_RENOVAR = [
-  "abadpinturas@abadpinturas.com",
-  "ventas@apcoatings.net",
-  "logistica@apcoatings.net",
-  "administracion@apcoatings.net",
-];
+// Cuentas a renovar = misma lista centralizada del sistema.
+// Antes era una copia manual de 4 alias; ahora solo vigilamos tomiralles@
+// (los 3 alias compartían buzón → era redundante).
+const CUENTAS_A_RENOVAR = CUENTAS_VIGILADAS;
 
 const TOPIC_NAME = "gmail-notifications";
 

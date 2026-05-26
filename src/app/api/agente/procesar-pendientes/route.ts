@@ -3,6 +3,7 @@ import { gmail_v1 } from "googleapis";
 import { sql } from "@/lib/db";
 import { getGmailClient } from "@/lib/google-auth";
 import { clasificarEmail, EmailInput } from "@/lib/clasificador";
+import { CUENTAS_VIGILADAS } from "@/lib/cuentas-vigiladas";
 
 /**
  * Subir el timeout de la función a 60s (Vercel Hobby permite hasta 60s).
@@ -47,12 +48,10 @@ export const maxDuration = 60;
  * }
  */
 
-const CUENTAS_A_PROCESAR = [
-  "abadpinturas@abadpinturas.com",
-  "ventas@apcoatings.net",
-  "logistica@apcoatings.net",
-  "administracion@apcoatings.net",
-];
+// Lista centralizada (ver src/lib/cuentas-vigiladas.ts).
+// Antes era una copia manual de 4 alias; ahora solo tomiralles@.
+// Esto reduce ~75% las llamadas a Gmail API por ciclo del cron.
+const CUENTAS_A_PROCESAR = CUENTAS_VIGILADAS;
 
 /**
  * Número máximo de mensajes a inspeccionar por cuenta en cada ciclo.
