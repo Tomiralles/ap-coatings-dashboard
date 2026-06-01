@@ -50,6 +50,40 @@ interface FilaPostgres {
   respuesta_auto: string | null;
   telefono: string | null;
   tipo_enum: string | null;
+  estado_funcional: string | null;
+  fuente: string | null;
+}
+
+/**
+ * Para emails escritos por el AGENTE (no por Apps Script), los campos de
+ * texto estado_legacy/tipo_legacy están vacíos. Derivamos los textos que
+ * el dashboard espera a partir del tipo enum del agente.
+ *
+ * Criterio de negocio (confirmado por Toni):
+ *   - Todo lo que requiere acción suya = "Pendiente (...)" → aparece en
+ *     el filtro Pendiente.
+ *   - Las facturas son pendientes hasta darlas de alta en el ERP.
+ *   - Solo logística y "otro" van directos a archivado.
+ */
+function derivarEstadoTipo(tipoEnum: string | null): {
+  estado: string;
+  tipo: string;
+} {
+  switch ((tipoEnum ?? "").toLowerCase()) {
+    case "pedido_cliente":
+      return { estado: "Pendiente (Pedido)", tipo: "Pedido" };
+    case "factura_proveedor":
+      return { estado: "Pendiente (Factura)", tipo: "Factura" };
+    case "consulta_cliente":
+      return { estado: "Pendiente (Consulta)", tipo: "Consulta" };
+    case "muestra_cliente":
+      // Las muestras se gestionan como consultas (van a esa pestaña)
+      return { estado: "Pendiente (Muestra)", tipo: "Consulta" };
+    case "logistica":
+      return { estado: "Archivado", tipo: "Logística" };
+    default:
+      return { estado: "Archivado", tipo: "Otro" };
+  }
 }
 
 export async function GET() {
@@ -65,15 +99,17 @@ export async function GET() {
         asunto,
         adjuntos_info,
         cuerpo,
-        datos_extraidos->>'estado_legacy' AS estado_legacy,
-        datos_extraidos->>'tipo_legacy'   AS tipo_legacy,
-        datos_extraidos->>'prioridad'     AS prioridad,
-        datos_extraidos->>'autoDropdown'  AS auto_dropdown,
-        datos_extraidos->>'respuestaAuto' AS respuesta_auto,
-        datos_extraidos->>'telefono'      AS telefono,
+        datos_extraidos->>'estado_legacy'    AS estado_legacy,
+        datos_extraidos->>'tipo_legacy'      AS tipo_legacy,
+        datos_extraidos->>'prioridad'        AS prioridad,
+        datos_extraidos->>'autoDropdown'     AS auto_dropdown,
+        datos_extraidos->>'respuestaAuto'    AS respuesta_auto,
+        datos_extraidos->>'telefono'         AS telefono,
+        datos_extraidos->>'estado_funcional' AS estado_funcional,
+        datos_extraidos->>'fuente'           AS fuente,
         tipo::text AS tipo_enum
       FROM emails
-      ORDER BY fila_sheet_idx NULLS LAST, recibido_en
+      ORDER BY fila_sheet_idx NULLS LAST, recibido_en DESC
     `) as unknown as FilaPostgres[];
 
     const registros = rows.map((r) => {
@@ -94,14 +130,24 @@ export async function GET() {
         enlace = r.adjuntos_info[0].drive_url || "";
       }
 
+      // Estado/tipo: si vienen de Apps Script (legacy) usamos esos textos.
+      // Si vienen del agente (legacy vacío) los derivamos del tipo enum.
+      let estado = r.estado_legacy || "";
+      let tipo = r.tipo_legacy || "";
+      if (!estado && !tipo) {
+        const derivado = derivarEstadoTipo(r.tipo_enum);
+        estado = derivado.estado;
+        tipo = derivado.tipo;
+      }
+
       return {
         fecha: r.recibido_en ? new Date(r.recibido_en).toString() : "",
         quien,
         asunto: r.asunto || "",
         enlace,
         cuerpo: r.cuerpo || "",
-        estado: r.estado_legacy || "",  // Texto original del Sheet
-        tipo: r.tipo_legacy || "",      // Texto original del Sheet
+        estado,
+        tipo,
         prioridad: r.prioridad || "",
         autoDropdown: r.auto_dropdown || "false",
         respuestaAuto: r.respuesta_auto || "",
