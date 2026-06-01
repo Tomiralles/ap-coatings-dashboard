@@ -4,6 +4,7 @@ import { sql } from "@/lib/db";
 import { getGmailClient } from "@/lib/google-auth";
 import { clasificarEmail, EmailInput } from "@/lib/clasificador";
 import { CUENTAS_VIGILADAS } from "@/lib/cuentas-vigiladas";
+import { escribirEnLegacy } from "@/lib/escribir-legacy";
 
 /**
  * Subir el timeout de la función a 60s (Vercel Hobby permite hasta 60s).
@@ -67,10 +68,14 @@ interface ResultadoPorCuenta {
   procesados: number;
   saltados: number;
   errores: number;
+  legacy_ok: number;       // escrituras a tablas legacy exitosas
+  legacy_falla: number;    // escrituras a tablas legacy fallidas (no bloquea)
   detalles: Array<{
     gmail_message_id: string;
     accion: "procesado" | "saltado_ya_existe" | "error" | "auth_falla";
     tipo_clasificado?: string;
+    legacy?: "ok" | "falla" | "saltado";
+    legacy_error?: string;
     error?: string;
     latencia_ms?: number;
   }>;
@@ -203,6 +208,8 @@ async function procesarCuenta(cuenta: string): Promise<ResultadoPorCuenta> {
     procesados: 0,
     saltados: 0,
     errores: 0,
+    legacy_ok: 0,
+    legacy_falla: 0,
     detalles: [],
   };
 
@@ -375,11 +382,45 @@ async function procesarCuenta(cuenta: string): Promise<ResultadoPorCuenta> {
         ON CONFLICT (gmail_message_id) DO NOTHING
       `;
 
+      // ─── Escribir también en tablas legacy (clientes / emails / pedidos) ──
+      // Esto reemplaza a Apps Script + sync horario: el dashboard antiguo
+      // (Sheets/Postgres) ve los emails nuevos en cuanto los clasificamos.
+      // Si falla, NO bloqueamos el procesado — la clasificación ya está
+      // guardada en clasificaciones_agente. Solo dejamos constancia.
+      let legacyStatus: "ok" | "falla" | "saltado" = "saltado";
+      let legacyError: string | undefined;
+      try {
+        await escribirEnLegacy({
+          gmail_message_id: m.id,
+          gmail_thread_id: m.threadId ?? null,
+          asunto,
+          remitente,
+          cuerpo,
+          fecha_recibido: fechaIso,
+          nombres_adjuntos,
+          clasificacion: c,
+        });
+        legacyStatus = "ok";
+        res.legacy_ok++;
+      } catch (legacyErr) {
+        legacyStatus = "falla";
+        legacyError =
+          legacyErr instanceof Error ? legacyErr.message : String(legacyErr);
+        res.legacy_falla++;
+        console.error(
+          `[procesar-pendientes] Legacy write FALLO para ${m.id}:`,
+          legacyError
+        );
+        // No relanzamos: el procesado del agente sigue contando como OK.
+      }
+
       res.procesados++;
       res.detalles.push({
         gmail_message_id: m.id,
         accion: "procesado",
         tipo_clasificado: (c.tipo as string) ?? "?",
+        legacy: legacyStatus,
+        legacy_error: legacyError,
         latencia_ms: resultado.latencia_ms,
       });
     } catch (err) {
