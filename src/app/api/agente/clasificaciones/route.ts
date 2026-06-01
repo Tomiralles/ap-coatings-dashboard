@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sql } from "@/lib/db";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 /**
  * Endpoint que sirve las clasificaciones del agente al dashboard.
  *

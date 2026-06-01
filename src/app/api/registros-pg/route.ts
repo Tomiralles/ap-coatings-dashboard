@@ -2,6 +2,15 @@ import { NextResponse } from "next/server";
 import { sql } from "@/lib/db";
 
 /**
+ * Forzar que este endpoint sea SIEMPRE dinámico (nunca cacheado).
+ * Sin esto, Next.js/Vercel puede servir una versión estática/cacheada
+ * con datos viejos (orden incorrecto, sin el campo id), lo que rompía
+ * el orden por fecha y el "marcar como hecho" en modo Postgres.
+ */
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+/**
  * Endpoint compatible con /api/sheets, pero leyendo desde PostgreSQL.
  *
  * Devuelve los emails almacenados en Postgres en el mismo formato que
