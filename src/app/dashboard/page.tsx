@@ -220,10 +220,14 @@ export default function DashboardPage() {
         // Necesitamos el id del email. Si no lo hay (fila legacy rara),
         // avisamos en vez de fallar en silencio.
         if (!registroActual.id) {
-          alert(
-            "Este registro no tiene id de Postgres, no se puede actualizar en modo Postgres. Cambia a modo Sheets para editarlo."
-          );
+          // Caso raro: datos cargados sin id (carrera antigua). En vez de
+          // dejar al usuario atascado, recargamos datos frescos de Postgres
+          // y le pedimos reintentar.
           setSaving(null);
+          await fetchData("postgres");
+          alert(
+            "He recargado los datos (faltaba el identificador interno). Vuelve a marcar el estado, por favor."
+          );
           return;
         }
         const campo =
@@ -277,6 +281,9 @@ export default function DashboardPage() {
     } finally {
       setSaving(null);
     }
+    // fetchData se usa dentro pero se declara después; comparten la
+    // dependencia fuenteDatos, así que no hay staleness real.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [registros, fuenteDatos]);
 
   const fetchData = useCallback(async (fuente?: "sheets" | "postgres") => {
@@ -299,24 +306,32 @@ export default function DashboardPage() {
     }
   }, [fuenteDatos]);
 
-  // Cargar preferencia de fuente del localStorage al iniciar
+  // Al montar: resolver la fuente guardada en localStorage y hacer el
+  // fetch directamente con ESA fuente. Así, si el usuario tenía Postgres
+  // guardado, la primera (y única) carga ya trae datos con id — sin la
+  // ventana "sheets primero, postgres después" que dejaba filas sin id.
   useEffect(() => {
     const guardada = typeof window !== "undefined"
       ? localStorage.getItem("ap-coatings-fuente-datos")
       : null;
-    if (guardada === "postgres" || guardada === "sheets") {
-      setFuenteDatos(guardada);
-    }
+    const fuente: "sheets" | "postgres" =
+      guardada === "postgres" || guardada === "sheets" ? guardada : "sheets";
+    setFuenteDatos(fuente);
+    fetchData(fuente);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Alternar entre Sheets y Postgres (persiste en localStorage)
-  // El useEffect que depende de fuenteDatos disparará el fetch automáticamente.
+  // Alternar entre Sheets y Postgres (persiste en localStorage).
+  // Hacemos el fetch EXPLÍCITO con la nueva fuente para evitar condiciones
+  // de carrera (antes dependíamos de un useEffect que podía dejar datos
+  // sin id durante un instante).
   const cambiarFuente = useCallback((nueva: "sheets" | "postgres") => {
     setFuenteDatos(nueva);
     if (typeof window !== "undefined") {
       localStorage.setItem("ap-coatings-fuente-datos", nueva);
     }
-  }, []);
+    fetchData(nueva);
+  }, [fetchData]);
 
   const fetchRespuestas = async () => {
     try {
@@ -446,10 +461,9 @@ export default function DashboardPage() {
     }
   };
 
-  // Recarga datos cada vez que cambia la fuente (Sheets ↔ Postgres)
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+  // (El fetch inicial y los cambios de fuente se hacen explícitamente en
+  // el efecto de montaje y en cambiarFuente, para evitar la doble carga
+  // que dejaba datos sin id momentáneamente.)
 
   // Polling de respuestas pendientes cada 30s (independiente de la fuente)
   useEffect(() => {
