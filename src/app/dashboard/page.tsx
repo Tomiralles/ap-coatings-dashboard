@@ -189,6 +189,15 @@ export default function DashboardPage() {
   const [loadingAgente, setLoadingAgente] = useState(false);
   const [filtroTipoAgente, setFiltroTipoAgente] = useState<string>("todos");
   const [filtroCuentaAgente, setFiltroCuentaAgente] = useState<string>("todas");
+  // Toggle auto-respuesta (Fase 4C/4D)
+  const [autoReplyEnabled, setAutoReplyEnabled] = useState<boolean | null>(null);
+  const [autoReplyStats, setAutoReplyStats] = useState<{
+    enviadas_hoy: number | string;
+    enviadas_semana: number | string;
+    enviadas_total: number | string;
+    fallidas_total: number | string;
+  } | null>(null);
+  const [togglingAutoReply, setTogglingAutoReply] = useState(false);
   // Fuente de datos: "sheets" (Apps Script, sistema actual) o "postgres" (nueva BD).
   // La preferencia se persiste en localStorage para que el usuario la conserve entre sesiones.
   const [fuenteDatos, setFuenteDatos] = useState<"sheets" | "postgres">("sheets");
@@ -307,6 +316,56 @@ export default function DashboardPage() {
     }
   }, []);
 
+  // Trae la configuración del agente (toggle auto-respuesta) + stats
+  const fetchAutoReplyConfig = useCallback(async () => {
+    try {
+      const res = await fetch("/api/agente/config");
+      const json = await res.json();
+      if (json.ok) {
+        setAutoReplyEnabled(json.config?.enabled ?? false);
+        setAutoReplyStats(json.stats ?? null);
+      }
+    } catch { /* silencioso */ }
+  }, []);
+
+  // Cambia el toggle auto-respuesta (con confirm para evitar activaciones accidentales)
+  const toggleAutoReply = useCallback(async (nuevoEstado: boolean) => {
+    if (nuevoEstado) {
+      const confirma = window.confirm(
+        "¿Activar AUTO-RESPUESTA del agente?\n\n" +
+        "A partir de ahora, el agente enviará automáticamente respuestas " +
+        "estándar (acuse de recibo) a emails que pasen TODOS los filtros " +
+        "de seguridad:\n\n" +
+        "  • Confianza >= 90%\n" +
+        "  • Tipo seguro (pedido, factura, muestra, consulta)\n" +
+        "  • NO Industriastak (VIP siempre escalado)\n" +
+        "  • NO prospecto nuevo\n" +
+        "  • NO palabras-trampa\n" +
+        "  • NO autoenvíos SQL Pyme\n\n" +
+        "Lo puedes apagar en cualquier momento desde aquí."
+      );
+      if (!confirma) return;
+    }
+    setTogglingAutoReply(true);
+    try {
+      const res = await fetch("/api/agente/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: nuevoEstado }),
+      });
+      const json = await res.json();
+      if (json.ok) {
+        setAutoReplyEnabled(json.config?.enabled ?? nuevoEstado);
+      } else {
+        alert("Error al cambiar el toggle: " + (json.error || "desconocido"));
+      }
+    } catch (err) {
+      alert("Error de conexión: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setTogglingAutoReply(false);
+    }
+  }, []);
+
   const generarRespuesta = async (
     rowIndex: number,
     tipo: "email" | "whatsapp",
@@ -379,9 +438,13 @@ export default function DashboardPage() {
   useEffect(() => {
     if (activeTab !== "agente") return;
     fetchClasificacionesAgente();
-    const interval = setInterval(fetchClasificacionesAgente, 30000);
+    fetchAutoReplyConfig();
+    const interval = setInterval(() => {
+      fetchClasificacionesAgente();
+      fetchAutoReplyConfig();
+    }, 30000);
     return () => clearInterval(interval);
-  }, [activeTab, fetchClasificacionesAgente]);
+  }, [activeTab, fetchClasificacionesAgente, fetchAutoReplyConfig]);
 
   // Registros sin entradas de prueba (filtro base)
   const registrosBase = useMemo(() => {
@@ -931,7 +994,7 @@ export default function DashboardPage() {
               </TabsContent>
             ))}
 
-            {/* ─── Pestaña "Agente IA" (Shadow Mode) ─── */}
+            {/* ─── Pestaña "Agente IA" (Shadow Mode + Auto-respuesta) ─── */}
             <TabsContent value="agente" className="mt-0">
               <PestanaAgenteIA
                 clasificaciones={clasificacionesAgente}
@@ -942,6 +1005,10 @@ export default function DashboardPage() {
                 setFiltroTipo={setFiltroTipoAgente}
                 filtroCuenta={filtroCuentaAgente}
                 setFiltroCuenta={setFiltroCuentaAgente}
+                autoReplyEnabled={autoReplyEnabled}
+                autoReplyStats={autoReplyStats}
+                togglingAutoReply={togglingAutoReply}
+                onToggleAutoReply={toggleAutoReply}
               />
             </TabsContent>
           </Tabs>
@@ -1002,6 +1069,10 @@ function PestanaAgenteIA({
   setFiltroTipo,
   filtroCuenta,
   setFiltroCuenta,
+  autoReplyEnabled,
+  autoReplyStats,
+  togglingAutoReply,
+  onToggleAutoReply,
 }: {
   clasificaciones: ClasificacionAgente[];
   stats: StatsAgente | null;
@@ -1011,6 +1082,15 @@ function PestanaAgenteIA({
   setFiltroTipo: (v: string) => void;
   filtroCuenta: string;
   setFiltroCuenta: (v: string) => void;
+  autoReplyEnabled: boolean | null;
+  autoReplyStats: {
+    enviadas_hoy: number | string;
+    enviadas_semana: number | string;
+    enviadas_total: number | string;
+    fallidas_total: number | string;
+  } | null;
+  togglingAutoReply: boolean;
+  onToggleAutoReply: (nuevo: boolean) => void;
 }) {
   // Aplicar filtros locales
   const filtradas = clasificaciones.filter((c) => {
@@ -1029,17 +1109,95 @@ function PestanaAgenteIA({
 
   return (
     <CardContent className="space-y-4 p-6">
-      {/* Banner explicativo de shadow mode */}
-      <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
-        <div className="flex items-start gap-2">
-          <Bot className="h-4 w-4 text-amber-700 mt-0.5" />
-          <div>
-            <strong className="text-amber-900">Shadow Mode activo.</strong>{" "}
-            <span className="text-amber-800">
-              El agente Claude clasifica todos los emails entrantes en silencio (sin actuar)
-              para validar precisión durante 2 semanas. No interfiere con el sistema actual.
-              Modelo en uso: <code className="bg-amber-100 px-1 rounded">{stats?.modelo_actual ?? "—"}</code>
+      {/* Banner explicativo + toggle de auto-respuesta */}
+      <div
+        className={`rounded-lg border px-4 py-3 text-sm transition-colors ${
+          autoReplyEnabled
+            ? "border-emerald-200 bg-emerald-50"
+            : "border-amber-200 bg-amber-50"
+        }`}
+      >
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div className="flex items-start gap-2 flex-1 min-w-[280px]">
+            <Bot
+              className={`h-4 w-4 mt-0.5 ${
+                autoReplyEnabled ? "text-emerald-700" : "text-amber-700"
+              }`}
+            />
+            <div>
+              <strong
+                className={
+                  autoReplyEnabled ? "text-emerald-900" : "text-amber-900"
+                }
+              >
+                {autoReplyEnabled
+                  ? "Auto-respuesta ACTIVA."
+                  : "Shadow Mode (auto-respuesta APAGADA)."}
+              </strong>{" "}
+              <span
+                className={
+                  autoReplyEnabled ? "text-emerald-800" : "text-amber-800"
+                }
+              >
+                {autoReplyEnabled
+                  ? "El agente responde automáticamente a emails que pasen TODOS los filtros de seguridad (confianza ≥90%, no Industriastak, no prospecto nuevo, tipo seguro, etc.). Los demás se escalan a tu bandeja."
+                  : "El agente Claude clasifica los emails sin actuar. Para que envíe auto-respuestas a casos seguros (acuse de recibo de pedidos/facturas/consultas), activa el toggle."}
+              </span>
+              <div className="text-xs mt-1 opacity-80">
+                Modelo:{" "}
+                <code className="bg-white/60 px-1 rounded">
+                  {stats?.modelo_actual ?? "—"}
+                </code>
+                {autoReplyStats && (
+                  <span className="ml-2">
+                    · Auto-enviadas hoy: <strong>{autoReplyStats.enviadas_hoy}</strong>{" "}
+                    · semana: {autoReplyStats.enviadas_semana} · total: {autoReplyStats.enviadas_total}
+                    {Number(autoReplyStats.fallidas_total) > 0 && (
+                      <span className="text-red-700">
+                        {" "}
+                        · ⚠ Fallidas: {autoReplyStats.fallidas_total}
+                      </span>
+                    )}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Toggle ON/OFF */}
+          <div className="flex items-center gap-2">
+            <span
+              className={`text-xs font-medium ${
+                autoReplyEnabled === null
+                  ? "text-gray-400"
+                  : autoReplyEnabled
+                    ? "text-emerald-700"
+                    : "text-amber-700"
+              }`}
+            >
+              {autoReplyEnabled === null
+                ? "Cargando…"
+                : autoReplyEnabled
+                  ? "ACTIVADO"
+                  : "APAGADO"}
             </span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={autoReplyEnabled === true}
+              disabled={togglingAutoReply || autoReplyEnabled === null}
+              onClick={() => onToggleAutoReply(!autoReplyEnabled)}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 ${
+                autoReplyEnabled ? "bg-emerald-600" : "bg-gray-300"
+              }`}
+              title={autoReplyEnabled ? "Apagar auto-respuesta" : "Activar auto-respuesta"}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                  autoReplyEnabled ? "translate-x-6" : "translate-x-1"
+                }`}
+              />
+            </button>
           </div>
         </div>
       </div>

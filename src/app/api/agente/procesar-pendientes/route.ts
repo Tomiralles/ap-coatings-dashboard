@@ -5,6 +5,33 @@ import { getGmailClient } from "@/lib/google-auth";
 import { clasificarEmail, EmailInput } from "@/lib/clasificador";
 import { CUENTAS_VIGILADAS } from "@/lib/cuentas-vigiladas";
 import { escribirEnLegacy } from "@/lib/escribir-legacy";
+import { puedeAutoResponder } from "@/lib/auto-respond-filtros";
+import { generarPlantilla } from "@/lib/auto-respond-plantillas";
+import { enviarRespuestaAutomatica } from "@/lib/auto-respond-enviar";
+
+// Lee la config del toggle de auto-respuesta una vez por invocación del cron
+// (no por email, para no hacer una query extra cada vuelta).
+interface AgentAutoReplyConfig {
+  enabled: boolean;
+  min_confianza: number;
+}
+
+async function leerConfigAutoReply(): Promise<AgentAutoReplyConfig> {
+  try {
+    const rows = await sql`
+      SELECT valor FROM config WHERE clave = 'agent_auto_reply' LIMIT 1
+    `;
+    if (rows.length === 0) return { enabled: false, min_confianza: 0.9 };
+    const v = rows[0].valor as Partial<AgentAutoReplyConfig> | undefined;
+    return {
+      enabled: typeof v?.enabled === "boolean" ? v.enabled : false,
+      min_confianza:
+        typeof v?.min_confianza === "number" ? v.min_confianza : 0.9,
+    };
+  } catch {
+    return { enabled: false, min_confianza: 0.9 };
+  }
+}
 
 /**
  * Subir el timeout de la función a 60s (Vercel Hobby permite hasta 60s).
@@ -70,12 +97,23 @@ interface ResultadoPorCuenta {
   errores: number;
   legacy_ok: number;       // escrituras a tablas legacy exitosas
   legacy_falla: number;    // escrituras a tablas legacy fallidas (no bloquea)
+  autoresp_enviadas: number;
+  autoresp_no_aplica: number;
+  autoresp_falladas: number;
   detalles: Array<{
     gmail_message_id: string;
     accion: "procesado" | "saltado_ya_existe" | "error" | "auth_falla";
     tipo_clasificado?: string;
     legacy?: "ok" | "falla" | "saltado";
     legacy_error?: string;
+    autoresp?:
+      | "enviada"
+      | "no_aplica"
+      | "fallada"
+      | "toggle_off"
+      | "no_plantilla";
+    autoresp_razon?: string;
+    autoresp_error?: string;
     error?: string;
     latencia_ms?: number;
   }>;
@@ -201,7 +239,10 @@ function verificarCronSecret(req: NextRequest): boolean {
  * por lo que se puede llamar a varias en paralelo con Promise.all sin
  * problemas de race conditions.
  */
-async function procesarCuenta(cuenta: string): Promise<ResultadoPorCuenta> {
+async function procesarCuenta(
+  cuenta: string,
+  configAutoReply: AgentAutoReplyConfig
+): Promise<ResultadoPorCuenta> {
   const res: ResultadoPorCuenta = {
     cuenta,
     inspeccionados: 0,
@@ -210,6 +251,9 @@ async function procesarCuenta(cuenta: string): Promise<ResultadoPorCuenta> {
     errores: 0,
     legacy_ok: 0,
     legacy_falla: 0,
+    autoresp_enviadas: 0,
+    autoresp_no_aplica: 0,
+    autoresp_falladas: 0,
     detalles: [],
   };
 
@@ -414,6 +458,166 @@ async function procesarCuenta(cuenta: string): Promise<ResultadoPorCuenta> {
         // No relanzamos: el procesado del agente sigue contando como OK.
       }
 
+      // ─── 4D: Auto-respuesta segura ──────────────────────────────────
+      // Solo si el toggle está ON. Filtros estrictos antes de generar y
+      // enviar. Cada paso registra el motivo si decide no enviar, para
+      // que veas en logs por qué este email no recibió auto-respuesta.
+      let autorespStatus:
+        | "enviada"
+        | "no_aplica"
+        | "fallada"
+        | "toggle_off"
+        | "no_plantilla" = "toggle_off";
+      let autorespRazon: string | undefined;
+      let autorespError: string | undefined;
+
+      if (configAutoReply.enabled) {
+        const decision = puedeAutoResponder(
+          {
+            tipo: c.tipo as string | null | undefined,
+            confianza: c.confianza as number | undefined,
+            es_industriastak: c.es_industriastak as boolean | undefined,
+            accion_sugerida: c.accion_sugerida as string | null | undefined,
+            palabras_trampa_detectadas:
+              (c.palabras_trampa_detectadas as string[] | undefined) ?? [],
+            cliente_detectado:
+              (c.cliente_detectado as
+                | { email?: string; es_prospecto?: boolean }
+                | undefined) ?? {},
+            datos_extraidos: {
+              es_autoenvio_sql_pyme: (datosExtraidos.es_autoenvio_sql_pyme as
+                | boolean
+                | undefined) ?? false,
+            },
+            asunto,
+            cuerpo,
+          },
+          configAutoReply.min_confianza
+        );
+
+        if (!decision.puede) {
+          autorespStatus = "no_aplica";
+          autorespRazon = decision.razon +
+            (decision.detalles ? ` (${decision.detalles})` : "");
+          res.autoresp_no_aplica++;
+        } else {
+          // Generar plantilla
+          const clienteDetectado =
+            (c.cliente_detectado as
+              | { email?: string; nombre?: string }
+              | undefined) ?? {};
+          const destinatarioEmail =
+            (clienteDetectado.email ?? "").toLowerCase();
+          const destinatarioNombre = clienteDetectado.nombre ?? "";
+
+          const plantilla = generarPlantilla(c.tipo as string | undefined, {
+            nombreCliente: destinatarioNombre,
+            asuntoOriginal: asunto,
+            idiomaDetectado: c.idioma as string | undefined,
+          });
+
+          if (!plantilla) {
+            autorespStatus = "no_plantilla";
+            autorespRazon = `tipo ${c.tipo} sin plantilla`;
+            res.autoresp_no_aplica++;
+          } else if (!destinatarioEmail || !destinatarioEmail.includes("@")) {
+            autorespStatus = "no_aplica";
+            autorespRazon = "destinatario_invalido";
+            res.autoresp_no_aplica++;
+          } else {
+            // Insertar fila PRELIMINAR en respuestas_auto_enviadas con
+            // enviado_ok=false. Si el envío falla, queda la auditoría.
+            let respAutoId: number | null = null;
+            try {
+              const insertResult = await sql`
+                INSERT INTO respuestas_auto_enviadas (
+                  gmail_message_id_entrante,
+                  gmail_thread_id,
+                  cuenta_origen,
+                  destinatario_email,
+                  destinatario_nombre,
+                  asunto_entrante,
+                  asunto_respuesta,
+                  cuerpo_respuesta,
+                  tipo_email,
+                  plantilla_usada,
+                  enviado_ok
+                )
+                VALUES (
+                  ${m.id},
+                  ${m.threadId ?? null},
+                  ${cuenta},
+                  ${destinatarioEmail},
+                  ${destinatarioNombre},
+                  ${asunto},
+                  ${plantilla.asunto},
+                  ${plantilla.cuerpo},
+                  ${(c.tipo as string) ?? null},
+                  ${plantilla.id},
+                  false
+                )
+                ON CONFLICT (gmail_message_id_entrante)
+                  WHERE enviado_ok = true
+                DO NOTHING
+                RETURNING id
+              `;
+
+              if (insertResult.length === 0) {
+                // Ya había una respuesta enviada para este email → anti-dup
+                autorespStatus = "no_aplica";
+                autorespRazon = "ya_respondido_antes";
+                res.autoresp_no_aplica++;
+              } else {
+                respAutoId = insertResult[0].id as number;
+
+                // Enviar vía Gmail
+                const envio = await enviarRespuestaAutomatica({
+                  cuentaOrigen: cuenta,
+                  destinatarioEmail,
+                  destinatarioNombre,
+                  asunto: plantilla.asunto,
+                  cuerpoTexto: plantilla.cuerpo,
+                  inReplyToMessageId: m.id,
+                  threadId: m.threadId ?? null,
+                  plantillaId: plantilla.id,
+                });
+
+                if (envio.ok) {
+                  autorespStatus = "enviada";
+                  res.autoresp_enviadas++;
+                  // Actualizar fila marcando éxito
+                  await sql`
+                    UPDATE respuestas_auto_enviadas
+                    SET enviado_ok = true,
+                        enviado_at = NOW(),
+                        gmail_message_id_enviado = ${envio.gmail_message_id_enviado ?? null}
+                    WHERE id = ${respAutoId}
+                  `;
+                } else {
+                  autorespStatus = "fallada";
+                  autorespError = envio.error;
+                  res.autoresp_falladas++;
+                  await sql`
+                    UPDATE respuestas_auto_enviadas
+                    SET error_envio = ${envio.error ?? null}
+                    WHERE id = ${respAutoId}
+                  `;
+                }
+              }
+            } catch (autoErr) {
+              autorespStatus = "fallada";
+              autorespError =
+                autoErr instanceof Error ? autoErr.message : String(autoErr);
+              res.autoresp_falladas++;
+              console.error(
+                `[procesar-pendientes] Auto-respuesta FALLO para ${m.id}:`,
+                autorespError
+              );
+            }
+          }
+        }
+      }
+
       res.procesados++;
       res.detalles.push({
         gmail_message_id: m.id,
@@ -421,6 +625,9 @@ async function procesarCuenta(cuenta: string): Promise<ResultadoPorCuenta> {
         tipo_clasificado: (c.tipo as string) ?? "?",
         legacy: legacyStatus,
         legacy_error: legacyError,
+        autoresp: autorespStatus,
+        autoresp_razon: autorespRazon,
+        autoresp_error: autorespError,
         latencia_ms: resultado.latencia_ms,
       });
     } catch (err) {
@@ -453,13 +660,19 @@ export async function GET(req: NextRequest) {
 
   const t0 = Date.now();
 
+  // Leemos la config del toggle auto-respuesta UNA VEZ por invocación
+  // (no por cuenta y desde luego no por email — evitamos N+1 queries).
+  const configAutoReply = await leerConfigAutoReply();
+
   // Procesamos las cuentas en PARALELO con Promise.all. Cada cuenta es
   // independiente (distinto cliente Gmail, distintos mensajes), así que
   // pasar de 4 cuentas secuenciales a 4 paralelas reduce la latencia
   // worst-case de ~4× a ~1×. Cada llamada a clasificarEmail() sigue siendo
   // secuencial DENTRO de una cuenta para no martillear la API.
   const porCuenta: ResultadoPorCuenta[] = await Promise.all(
-    CUENTAS_A_PROCESAR.map((cuenta) => procesarCuenta(cuenta))
+    CUENTAS_A_PROCESAR.map((cuenta) =>
+      procesarCuenta(cuenta, configAutoReply)
+    )
   );
 
   const totalProcesados = porCuenta.reduce((a, b) => a + b.procesados, 0);
