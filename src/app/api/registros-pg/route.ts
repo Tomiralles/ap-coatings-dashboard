@@ -36,6 +36,8 @@ interface DatosExtraidos {
 }
 
 interface FilaPostgres {
+  id: string;
+  gmail_message_id: string | null;
   fila_sheet_idx: number | null;
   recibido_en: Date;
   remitente_nombre: string | null;
@@ -51,6 +53,7 @@ interface FilaPostgres {
   telefono: string | null;
   tipo_enum: string | null;
   estado_funcional: string | null;
+  estado_override: string | null;
   fuente: string | null;
 }
 
@@ -92,6 +95,8 @@ export async function GET() {
     // Ordenados por fila_sheet_idx para mantener el orden original.
     const rows = (await sql`
       SELECT
+        id::text AS id,
+        gmail_message_id,
         (datos_extraidos->>'fila_sheet_idx')::int AS fila_sheet_idx,
         recibido_en,
         remitente_nombre,
@@ -106,10 +111,11 @@ export async function GET() {
         datos_extraidos->>'respuestaAuto'    AS respuesta_auto,
         datos_extraidos->>'telefono'         AS telefono,
         datos_extraidos->>'estado_funcional' AS estado_funcional,
+        datos_extraidos->>'estado_override'  AS estado_override,
         datos_extraidos->>'fuente'           AS fuente,
         tipo::text AS tipo_enum
       FROM emails
-      ORDER BY fila_sheet_idx NULLS LAST, recibido_en DESC
+      ORDER BY recibido_en DESC NULLS LAST
     `) as unknown as FilaPostgres[];
 
     const registros = rows.map((r) => {
@@ -130,17 +136,20 @@ export async function GET() {
         enlace = r.adjuntos_info[0].drive_url || "";
       }
 
-      // Estado/tipo: si vienen de Apps Script (legacy) usamos esos textos.
-      // Si vienen del agente (legacy vacío) los derivamos del tipo enum.
-      let estado = r.estado_legacy || "";
+      // Estado/tipo: prioridad de fuentes:
+      //   1. estado_override → lo que Toni marcó manualmente (gana siempre)
+      //   2. estado_legacy   → texto original de Apps Script
+      //   3. derivado        → del tipo enum del agente
+      let estado = r.estado_override || r.estado_legacy || "";
       let tipo = r.tipo_legacy || "";
-      if (!estado && !tipo) {
+      if (!estado || !tipo) {
         const derivado = derivarEstadoTipo(r.tipo_enum);
-        estado = derivado.estado;
-        tipo = derivado.tipo;
+        if (!estado) estado = derivado.estado;
+        if (!tipo) tipo = derivado.tipo;
       }
 
       return {
+        id: r.id,
         fecha: r.recibido_en ? new Date(r.recibido_en).toString() : "",
         quien,
         asunto: r.asunto || "",

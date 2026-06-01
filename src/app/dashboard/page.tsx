@@ -43,6 +43,7 @@ import {
 import { ArrowRight } from "lucide-react";
 
 interface Registro {
+  id?: string;          // UUID del email en Postgres (solo en fuente postgres)
   fecha: string;
   quien: string;
   asunto: string;
@@ -212,19 +213,44 @@ export default function DashboardPage() {
     const key = `${fila}-${columna}`;
     setSaving(key);
     try {
-      const res = await fetch("/api/sheets/update", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fila,
-          columna,
-          valor,
-          telefono: registroActual.telefono,
-          quien: registroActual.quien,
-          asunto: registroActual.asunto,
-        }),
-      });
-      const data = await res.json();
+      let data: { ok?: boolean; error?: string };
+
+      if (fuenteDatos === "postgres") {
+        // En modo Postgres actualizamos directamente la BD (no Sheets).
+        // Necesitamos el id del email. Si no lo hay (fila legacy rara),
+        // avisamos en vez de fallar en silencio.
+        if (!registroActual.id) {
+          alert(
+            "Este registro no tiene id de Postgres, no se puede actualizar en modo Postgres. Cambia a modo Sheets para editarlo."
+          );
+          setSaving(null);
+          return;
+        }
+        const campo =
+          columna === 6 ? "estado" : columna === 8 ? "prioridad" : "telefono";
+        const res = await fetch("/api/registros-pg/update", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: registroActual.id, campo, valor }),
+        });
+        data = await res.json();
+      } else {
+        // Modo Sheets (sistema antiguo via Apps Script)
+        const res = await fetch("/api/sheets/update", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fila,
+            columna,
+            valor,
+            telefono: registroActual.telefono,
+            quien: registroActual.quien,
+            asunto: registroActual.asunto,
+          }),
+        });
+        data = await res.json();
+      }
+
       if (data.ok) {
         setRegistros((prev) =>
           prev.map((r, i) => {
@@ -251,7 +277,7 @@ export default function DashboardPage() {
     } finally {
       setSaving(null);
     }
-  }, [registros]);
+  }, [registros, fuenteDatos]);
 
   const fetchData = useCallback(async (fuente?: "sheets" | "postgres") => {
     const fuenteActiva = fuente ?? fuenteDatos;
