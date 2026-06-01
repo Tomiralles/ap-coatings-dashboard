@@ -56,18 +56,18 @@ function mapearTipoAgenteALegacy(tipoAgente: string | null | undefined): string 
 
 /**
  * Estado inicial de un email recién clasificado por el agente.
- * Los pedidos y consultas entran como "pendiente" (Toni tiene que actuar).
- * Las facturas y logística como "archivado" (informativo).
+ *
+ * El enum legacy `estado_email` en Postgres NO acepta "pendiente" — solo
+ * "archivado" entre otros. La migración antigua usaba siempre "archivado"
+ * y el dashboard deriva el estado real desde otros campos (tipo, fecha,
+ * datos_extraidos.accion_sugerida).
+ *
+ * Por consistencia con la migración, usamos siempre "archivado". El estado
+ * de acción ("pendiente / enviado / etc.") vive en datos_extraidos donde
+ * el dashboard ya lo lee.
  */
-function estadoInicialLegacy(tipoLegacy: string): string {
-  if (
-    tipoLegacy === "factura_proveedor" ||
-    tipoLegacy === "logistica" ||
-    tipoLegacy === "otro"
-  ) {
-    return "archivado";
-  }
-  return "pendiente";
+function estadoInicialLegacy(_tipoLegacy: string): string {
+  return "archivado";
 }
 
 export interface EscribirLegacyParams {
@@ -174,6 +174,17 @@ export async function escribirEnLegacy(
     tipo: nombre.toLowerCase().endsWith(".pdf") ? "pdf" : "otro",
   }));
 
+  // "Estado funcional" derivado: lo que el dashboard usará para distinguir
+  // pendiente vs archivado más allá del enum estado_email (limitado).
+  // Facturas y logística entran como "archivado" funcional (informativo,
+  // no requieren acción). Pedidos y consultas como "pendiente".
+  const estadoFuncional =
+    tipoLegacy === "factura_proveedor" ||
+    tipoLegacy === "logistica" ||
+    tipoLegacy === "otro"
+      ? "archivado"
+      : "pendiente";
+
   // Datos enriquecidos extraídos por el agente — los guardamos como JSONB
   // para que el dashboard pueda mostrarlos opcionalmente sin queries extra.
   const datosLegacy = {
@@ -181,6 +192,7 @@ export async function escribirEnLegacy(
     modelo_clasificador: (clasificacion.modelo as string) ?? null,
     confianza_agente: clasificacion.confianza ?? null,
     prioridad_agente: clasificacion.prioridad ?? null,
+    estado_funcional: estadoFuncional, // <-- usado por dashboard para filtros
     accion_sugerida: clasificacion.accion_sugerida ?? null,
     idioma: clasificacion.idioma ?? null,
     razon_clasificacion: clasificacion.razon ?? null,
