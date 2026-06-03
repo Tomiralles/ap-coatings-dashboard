@@ -124,6 +124,20 @@ export async function GET() {
         datos_extraidos->>'fuente'           AS fuente,
         tipo::text AS tipo_enum
       FROM emails
+      WHERE NOT (
+        -- Excluir la fila "legacy" (de Apps Script/Sheets) cuando ya existe
+        -- su gemela escrita por el agente (mismo remitente + asunto + día).
+        -- Así desaparecen los duplicados del periodo en que ambos sistemas
+        -- funcionaban a la vez, sin borrar nada de la BD.
+        gmail_message_id LIKE 'legacy-%'
+        AND EXISTS (
+          SELECT 1 FROM emails e2
+          WHERE e2.gmail_message_id NOT LIKE 'legacy-%'
+            AND e2.remitente_email = emails.remitente_email
+            AND e2.asunto IS NOT DISTINCT FROM emails.asunto
+            AND date(e2.recibido_en) = date(emails.recibido_en)
+        )
+      )
       ORDER BY recibido_en DESC NULLS LAST
     `) as unknown as FilaPostgres[];
 
