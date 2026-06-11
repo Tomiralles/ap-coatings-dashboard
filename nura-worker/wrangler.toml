@@ -1,0 +1,11 @@
+name = "nura"
+main = "index.js"
+compatibility_date = "2025-01-01"
+
+# Las claves NO van aquí (son secretos). Se cargan con:
+#   wrangler secret put ZADARMA_KEY
+#   wrangler secret put ZADARMA_SECRET
+#   wrangler secret put OPENAI_API_KEY
+#   wrangler secret put RESEND_API_KEY
+#   wrangler secret put AIRTABLE_API_KEY
+#   wrangler secret put AIRTABLE_BASE_ID
