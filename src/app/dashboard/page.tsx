@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
+import Link from "next/link";
 import {
   Package,
   FileText,
@@ -20,6 +21,7 @@ import {
   X,
   RotateCcw,
   FlaskConical,
+  Users,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -670,6 +672,14 @@ export default function DashboardPage() {
                 </span>
               </button>
             )}
+            <Link
+              href="/dashboard/clientes"
+              className="flex items-center gap-2 px-3 py-2 text-sm rounded-md border hover:bg-gray-50 transition-colors"
+              title="Gestión de clientes WhatsApp"
+            >
+              <Users className="h-4 w-4" />
+              <span className="hidden sm:inline">Clientes</span>
+            </Link>
             <button
               onClick={() => fetchData()}
               className="flex items-center gap-2 px-3 py-2 text-sm rounded-md border hover:bg-gray-50 transition-colors"

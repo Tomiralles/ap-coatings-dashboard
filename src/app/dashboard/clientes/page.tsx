@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Plus, RefreshCw, Pause, Play, Trash2, X, Check } from "lucide-react";
+import Link from "next/link";
+import { Plus, RefreshCw, Pause, Play, Trash2, X, Check, ArrowLeft } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -148,6 +149,12 @@ export default function ClientesPage() {
       {/* Cabecera */}
       <div className="mb-6 flex items-center justify-between">
         <div>
+          <Link
+            href="/dashboard"
+            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground mb-1 transition-colors"
+          >
+            <ArrowLeft size={12} /> Dashboard
+          </Link>
           <h1 className="text-2xl font-bold">Mis clientes</h1>
           <p className="text-sm text-muted-foreground">
             {clientes.length} {clientes.length === 1 ? "cliente" : "clientes"} ·
