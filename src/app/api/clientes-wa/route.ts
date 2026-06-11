@@ -102,6 +102,10 @@ export async function POST(req: NextRequest) {
   const promptAgente = body.prompt_agente ?? null;
   const activo = typeof body.activo === "boolean" ? body.activo : true;
 
+  // Si el token viene enmascarado (****xxxx), es que el panel reenvió un valor
+  // de solo lectura: NO sobrescribimos el token real, conservamos el existente.
+  const tokenEnmascarado = body.access_token.startsWith("****");
+
   try {
     const rows = await sql`
       INSERT INTO clientes_whatsapp
@@ -114,7 +118,9 @@ export async function POST(req: NextRequest) {
         nombre            = EXCLUDED.nombre,
         sector            = EXCLUDED.sector,
         phone_number_id   = EXCLUDED.phone_number_id,
-        access_token      = EXCLUDED.access_token,
+        access_token      = CASE WHEN ${tokenEnmascarado}
+                                 THEN clientes_whatsapp.access_token
+                                 ELSE EXCLUDED.access_token END,
         template_name     = EXCLUDED.template_name,
         template_language = EXCLUDED.template_language,
         prompt_agente     = EXCLUDED.prompt_agente,
