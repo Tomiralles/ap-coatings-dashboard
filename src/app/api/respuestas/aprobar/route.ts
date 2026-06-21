@@ -1,12 +1,24 @@
 import { NextResponse } from "next/server";
+import { sql } from "@/lib/db";
 import { sendWhatsAppNotification, sendWhatsAppFreeform } from "@/lib/whatsapp";
+import { enviarRespuestaAutomatica } from "@/lib/auto-respond-enviar";
+import { CUENTAS_VIGILADAS } from "@/lib/cuentas-vigiladas";
+
+/**
+ * Aprueba y ENVÍA una respuesta de la cola.
+ *
+ * POST /api/respuestas/aprobar
+ *   body: { id, tipo, destinatario, asunto?, threadId?, borradorFinal, contextoJson? }
+ *
+ * - Email   → se envía vía Gmail API impersonando tomiralles@apcoatings.net
+ *             (DWD). Antes usaba Apps Script (fuera de servicio).
+ * - WhatsApp→ vía API de WhatsApp (sin cambios).
+ * Tras enviar, marca la fila como 'aprobado' en Postgres.
+ */
+
+export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
-  const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
-  if (!scriptUrl) {
-    return NextResponse.json({ error: "GOOGLE_APPS_SCRIPT_URL no configurada" }, { status: 500 });
-  }
-
   let id: string | undefined;
 
   try {
@@ -28,29 +40,31 @@ export async function POST(request: Request) {
 
     let sendResult: { ok: boolean; error?: string } = { ok: false };
 
-    // 1. Enviar el mensaje según el tipo
+    // 1. Enviar según el tipo
     if (tipo === "email") {
-      const emailRes = await fetch(scriptUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          accion: "enviarEmail",
-          para: destinatario,
-          asunto: asunto ?? "Respuesta AP Coatings",
-          cuerpo: borradorFinal,
-          threadId: threadId ?? "",
-        }),
-        redirect: "follow",
+      // Nombre del destinatario desde el contexto, si lo hay
+      let destinatarioNombre = "";
+      try {
+        const ctx = JSON.parse(contextoJson ?? "{}");
+        destinatarioNombre = (ctx.quien ?? "").split("<")[0].replace(/"/g, "").trim();
+      } catch { /* sin nombre */ }
+
+      const envio = await enviarRespuestaAutomatica({
+        cuentaOrigen: CUENTAS_VIGILADAS[0], // tomiralles@apcoatings.net
+        destinatarioEmail: destinatario,
+        destinatarioNombre,
+        asunto: asunto ?? "Respuesta AP Coatings",
+        cuerpoTexto: borradorFinal,
+        inReplyToMessageId: null,
+        threadId: threadId || null,
+        plantillaId: "cola_aprobada_manual",
       });
-      const text = await emailRes.text();
-      try { sendResult = JSON.parse(text); } catch { sendResult = { ok: emailRes.ok }; }
+      sendResult = { ok: envio.ok, error: envio.error };
     } else if (tipo === "whatsapp") {
-      // Intentar mensaje libre primero; si falla, usar template
       const freeRes = await sendWhatsAppFreeform(destinatario, borradorFinal);
       if (freeRes.ok) {
         sendResult = freeRes;
       } else {
-        // Fallback: template (pedido listo)
         let quien = destinatario;
         try {
           const ctx = JSON.parse(contextoJson ?? "{}");
@@ -62,10 +76,9 @@ export async function POST(request: Request) {
 
     if (!sendResult.ok) {
       console.error("[aprobar] ERROR envío tipo:", tipo, "id:", id, sendResult.error);
-      // Token WhatsApp inválido o caducado → 401 explícito
       if (sendResult.error === "TOKEN_INVALID") {
         return NextResponse.json(
-          { error: "Token WhatsApp inválido o caducado. Renueva WHATSAPP_ACCESS_TOKEN en Vercel.", details: (sendResult as { ok: boolean; error: string; details?: string }).details },
+          { error: "Token WhatsApp inválido o caducado. Renueva WHATSAPP_ACCESS_TOKEN en Vercel." },
           { status: 401 }
         );
       }
@@ -75,36 +88,18 @@ export async function POST(request: Request) {
       );
     }
 
-    // 2. Actualizar estado en Cola_Respuestas — verificar respuesta
-    const updateRes = await fetch(scriptUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        accion: "actualizarCola",
-        id,
-        estado: "aprobado",
-        borradorFinal,
-      }),
-      redirect: "follow",
+    // 2. Marcar como aprobado en Postgres (el envío ya se hizo)
+    await sql`
+      UPDATE cola_respuestas
+      SET estado = 'aprobado',
+          borrador = ${borradorFinal},
+          enviado_en = NOW()
+      WHERE id = ${id}
+    `.catch((err) => {
+      console.error("[aprobar] No se pudo marcar aprobado id:", id, String(err));
     });
 
-    const updateText = await updateRes.text();
-    let updateData: { ok?: boolean; error?: string };
-    try {
-      updateData = JSON.parse(updateText);
-    } catch {
-      updateData = { ok: false, error: `Respuesta no-JSON de Apps Script: ${updateText.substring(0, 200)}` };
-    }
-
-    if (!updateData?.ok) {
-      // El mensaje ya fue enviado, pero no se pudo marcar en Sheets — loguear pero no fallar
-      console.error("[aprobar] actualizarCola falló id:", id, JSON.stringify(updateData));
-    } else {
-      console.log("[aprobar] OK id:", id, "tipo:", tipo);
-    }
-
     return NextResponse.json({ ok: true });
-
   } catch (err) {
     console.error("[aprobar] ERROR interno id:", id, String(err));
     return NextResponse.json({ error: "Error interno", details: String(err) }, { status: 500 });

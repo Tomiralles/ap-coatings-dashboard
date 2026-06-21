@@ -1,50 +1,44 @@
 import { NextResponse } from "next/server";
+import { sql } from "@/lib/db";
+
+/**
+ * Rechaza (borra) una respuesta de la cola.
+ *
+ * POST /api/respuestas/rechazar  body: { id }
+ *
+ * Marca la respuesta como 'rechazado'. Al dejar de estar en
+ * ('pendiente','auto-aprobado'), desaparece de la lista que ve el
+ * dashboard. Esto SÍ funciona ahora (Postgres), antes fallaba porque
+ * escribía en Apps Script (fuera de servicio).
+ */
+
+export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
-  const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
-  if (!scriptUrl) {
-    return NextResponse.json({ error: "GOOGLE_APPS_SCRIPT_URL no configurada" }, { status: 500 });
-  }
-
-  let id: string | undefined;
-
   try {
     const body = await request.json();
-    id = body?.id;
+    const id = body?.id;
 
     if (!id) {
       return NextResponse.json({ error: "Falta parámetro: id" }, { status: 400 });
     }
 
-    const res = await fetch(scriptUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ accion: "actualizarCola", id, estado: "rechazado" }),
-      redirect: "follow",
-    });
+    const result = await sql`
+      UPDATE cola_respuestas
+      SET estado = 'rechazado'
+      WHERE id = ${id}
+      RETURNING id
+    `;
 
-    const text = await res.text();
-    let data: { ok?: boolean; error?: string };
-
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = { ok: false, error: `Respuesta no-JSON de Apps Script: ${text.substring(0, 200)}` };
-    }
-
-    if (!data?.ok) {
-      console.error("[rechazar] ERROR Apps Script:", JSON.stringify(data), "id:", id);
+    if (result.length === 0) {
       return NextResponse.json(
-        { error: "Apps Script no confirmó el rechazo", details: data },
-        { status: 500 }
+        { error: "No se encontró la respuesta con ese id", id },
+        { status: 404 }
       );
     }
 
-    console.log("[rechazar] OK id:", id);
-    return NextResponse.json({ ok: true });
-
+    return NextResponse.json({ ok: true, id });
   } catch (err) {
-    console.error("[rechazar] ERROR interno id:", id, String(err));
     return NextResponse.json({ error: "Error interno", details: String(err) }, { status: 500 });
   }
 }

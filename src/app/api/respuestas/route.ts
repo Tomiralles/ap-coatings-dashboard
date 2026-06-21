@@ -1,7 +1,18 @@
 import { NextResponse } from "next/server";
+import { sql } from "@/lib/db";
 
-const SPREADSHEET_ID = "1AwQRGxXeIWIN5ODjvDbbjNGCB-UQ8UdEPZUpuoHKzvE";
-const SHEET_NAME = "Cola_Respuestas";
+/**
+ * Cola de respuestas pendientes de aprobación — ahora en PostgreSQL (Neon).
+ *
+ * Antes vivía en Google Sheets (Cola_Respuestas) vía Apps Script. Como
+ * Apps Script está fuera de servicio, se migró a Postgres: así leer,
+ * crear, aprobar y rechazar funcionan sin depender de Sheets.
+ *
+ * GET /api/respuestas → devuelve las respuestas pendientes y auto-aprobadas.
+ */
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export interface RespuestaPendiente {
   id: string;
@@ -18,92 +29,52 @@ export interface RespuestaPendiente {
   autoEnviado?: boolean;
 }
 
+interface FilaCola {
+  id: string;
+  fecha_creacion: Date | null;
+  tipo: string;
+  row_origen: string | null;
+  destinatario: string;
+  asunto: string | null;
+  thread_id: string | null;
+  borrador: string;
+  estado: string;
+  enviado_en: Date | null;
+  contexto_json: string | null;
+  auto_enviado: boolean | null;
+}
+
 export async function GET() {
-  // Intentar primero vía Apps Script
-  const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
-  if (scriptUrl) {
-    try {
-      const res = await fetch(`${scriptUrl}?accion=leerHoja&hoja=${encodeURIComponent(SHEET_NAME)}`, {
-        method: "GET",
-        redirect: "follow",
-      });
-      const data = await res.json();
-      if (data.ok && data.values) {
-        const rows: string[][] = data.values;
-        if (rows.length < 2) return NextResponse.json({ respuestas: [] });
-        const respuestas: RespuestaPendiente[] = rows.slice(1)
-          .filter((row) => {
-            const estado = row[8] ?? "pendiente";
-            return estado === "pendiente" || estado === "auto-aprobado";
-          })
-          .map((row, idx) => ({
-            id: row[0] ?? String(idx),
-            fechaCreacion: row[1] ?? "",
-            tipo: (row[2] ?? "email") as "email" | "whatsapp",
-            rowOrigen: row[3] ?? "",
-            destinatario: row[4] ?? "",
-            asunto: row[5] ?? "",
-            threadId: row[6] ?? "",
-            borrador: row[7] ?? "",
-            estado: (row[8] ?? "pendiente") as "pendiente" | "aprobado" | "rechazado" | "auto-aprobado",
-            enviadoEn: row[9] ?? "",
-            contextoJson: row[10] ?? "",
-            autoEnviado: (row[11] ?? "false").toLowerCase() === "true",
-          }));
-        return NextResponse.json({ respuestas });
-      }
-    } catch (err) {
-      console.warn("Apps Script falló, intentando Sheets API:", err);
-    }
-  }
-
-  // Fallback: Sheets API
-  const apiKey = process.env.GOOGLE_SHEETS_API_KEY;
-  if (!apiKey) {
-    return NextResponse.json({ error: "Ni GOOGLE_APPS_SCRIPT_URL ni GOOGLE_SHEETS_API_KEY configuradas" }, { status: 500 });
-  }
-
   try {
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${encodeURIComponent(SHEET_NAME)}?key=${apiKey}`;
-    const res = await fetch(url, { next: { revalidate: 0 } });
+    const rows = (await sql`
+      SELECT
+        id, fecha_creacion, tipo, row_origen, destinatario, asunto,
+        thread_id, borrador, estado, enviado_en, contexto_json, auto_enviado
+      FROM cola_respuestas
+      WHERE estado IN ('pendiente', 'auto-aprobado')
+      ORDER BY created_at DESC
+    `) as unknown as FilaCola[];
 
-    if (!res.ok) {
-      const errBody = await res.text();
-      if (res.status === 400 || res.status === 404) {
-        return NextResponse.json({ respuestas: [] });
-      }
-      return NextResponse.json({ error: "Error al leer Cola_Respuestas", details: errBody }, { status: res.status });
-    }
-
-    const data = await res.json();
-    const rows: string[][] = data.values ?? [];
-
-    if (rows.length < 2) {
-      return NextResponse.json({ respuestas: [] });
-    }
-
-    const respuestas: RespuestaPendiente[] = rows.slice(1)
-      .filter((row) => {
-        const estado = row[8] ?? "pendiente";
-        return estado === "pendiente" || estado === "auto-aprobado";
-      })
-      .map((row, idx) => ({
-        id: row[0] ?? String(idx),
-        fechaCreacion: row[1] ?? "",
-        tipo: (row[2] ?? "email") as "email" | "whatsapp",
-        rowOrigen: row[3] ?? "",
-        destinatario: row[4] ?? "",
-        asunto: row[5] ?? "",
-        threadId: row[6] ?? "",
-        borrador: row[7] ?? "",
-        estado: (row[8] ?? "pendiente") as "pendiente" | "aprobado" | "rechazado" | "auto-aprobado",
-        enviadoEn: row[9] ?? "",
-        contextoJson: row[10] ?? "",
-        autoEnviado: (row[11] ?? "false").toLowerCase() === "true",
-      }));
+    const respuestas: RespuestaPendiente[] = rows.map((r) => ({
+      id: r.id,
+      fechaCreacion: r.fecha_creacion ? new Date(r.fecha_creacion).toISOString() : "",
+      tipo: (r.tipo === "whatsapp" ? "whatsapp" : "email") as "email" | "whatsapp",
+      rowOrigen: r.row_origen ?? "",
+      destinatario: r.destinatario ?? "",
+      asunto: r.asunto ?? "",
+      threadId: r.thread_id ?? "",
+      borrador: r.borrador ?? "",
+      estado: (r.estado ?? "pendiente") as RespuestaPendiente["estado"],
+      enviadoEn: r.enviado_en ? new Date(r.enviado_en).toISOString() : "",
+      contextoJson: r.contexto_json ?? "",
+      autoEnviado: r.auto_enviado ?? false,
+    }));
 
     return NextResponse.json({ respuestas });
   } catch (err) {
-    return NextResponse.json({ error: "Error interno", details: String(err) }, { status: 500 });
+    return NextResponse.json(
+      { error: "Error leyendo cola_respuestas", details: String(err) },
+      { status: 500 }
+    );
   }
 }
