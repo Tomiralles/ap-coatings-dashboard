@@ -120,6 +120,41 @@ interface OpcionesProcesado {
   maxListar: number;
 }
 
+// Remitentes cuyos autoenvíos (pedidos de SQL Pyme) deben captarse AUNQUE
+// estén archivados / fuera de Recibidos. Un filtro de Gmail los saca del
+// INBOX al llegar, así que se buscan por remitente SIN el filtro labelIds.
+// Nota: todos los alias @apcoatings.net comparten el buzón de tomiralles@.
+const REMITENTES_AUTOENVIO = [
+  "abadpinturas@abadpinturas.com",   // legacy (en baja); recupera los perdidos
+  "administracion@apcoatings.net",   // nuevo origen de los autoenvíos SQL Pyme
+];
+
+/**
+ * Lista mensajes de Gmail paginando hasta `maxListar`. Con `labelIds` filtra
+ * por esas etiquetas (p.ej. INBOX); sin ellas, busca en todo el correo
+ * (incluidos los archivados), excepto spam y papelera.
+ */
+async function paginarMensajes(
+  gmail: gmail_v1.Gmail,
+  params: { labelIds?: string[]; q: string },
+  maxListar: number
+): Promise<gmail_v1.Schema$Message[]> {
+  const out: gmail_v1.Schema$Message[] = [];
+  let pageToken: string | undefined = undefined;
+  do {
+    const resp = (await gmail.users.messages.list({
+      userId: "me",
+      ...(params.labelIds ? { labelIds: params.labelIds } : {}),
+      q: params.q,
+      maxResults: 100,
+      pageToken,
+    })) as unknown as { data: gmail_v1.Schema$ListMessagesResponse };
+    for (const m of resp.data.messages ?? []) out.push(m);
+    pageToken = resp.data.nextPageToken ?? undefined;
+  } while (pageToken && out.length < maxListar);
+  return out;
+}
+
 interface ResultadoPorCuenta {
   cuenta: string;
   inspeccionados: number;
@@ -302,25 +337,31 @@ async function procesarCuenta(
     return res;
   }
 
-  // 1. Listar una ventana amplia del INBOX (con paginación), no solo el top-N.
-  const queryGmail = [`newer_than:${opts.dias}d`, opts.queryExtra]
-    .filter(Boolean)
-    .join(" ");
+  // 1. Reunir mensajes de DOS fuentes y deduplicar por id:
+  //    (a) INBOX: correo entrante normal (ventana de N días).
+  //    (b) Autoenvíos de SQL Pyme (pedidos) buscados por remitente SIN el
+  //        filtro INBOX, para captarlos aunque un filtro de Gmail los haya
+  //        archivado (no aparecen en Recibidos pero sí en una búsqueda).
+  const ventana = `newer_than:${opts.dias}d`;
+  const qInbox = [ventana, opts.queryExtra].filter(Boolean).join(" ");
+  const fromAutoenvio = REMITENTES_AUTOENVIO.map((e) => `from:${e}`).join(" OR ");
+  const qAutoenvio = `(${fromAutoenvio}) ${ventana}`;
 
-  const mensajes: gmail_v1.Schema$Message[] = [];
+  const porId = new Map<string, gmail_v1.Schema$Message>();
   try {
-    let pageToken: string | undefined = undefined;
-    do {
-      const listResp = (await gmail.users.messages.list({
-        userId: "me",
-        labelIds: ["INBOX"],
-        q: queryGmail,
-        maxResults: 100,
-        pageToken,
-      })) as unknown as { data: gmail_v1.Schema$ListMessagesResponse };
-      for (const m of listResp.data.messages ?? []) mensajes.push(m);
-      pageToken = listResp.data.nextPageToken ?? undefined;
-    } while (pageToken && mensajes.length < opts.maxListar);
+    const inbox = await paginarMensajes(
+      gmail,
+      { labelIds: ["INBOX"], q: qInbox },
+      opts.maxListar
+    );
+    const autoenvios = await paginarMensajes(
+      gmail,
+      { q: qAutoenvio }, // sin labelIds → incluye los archivados
+      opts.maxListar
+    );
+    for (const m of [...inbox, ...autoenvios]) {
+      if (m.id) porId.set(m.id, m);
+    }
   } catch (err) {
     res.errores++;
     res.detalles.push({
@@ -331,6 +372,7 @@ async function procesarCuenta(
     return res;
   }
 
+  const mensajes = [...porId.values()];
   res.inspeccionados = mensajes.length;
 
   // Prefetch: una sola query para saber cuáles ya están clasificados.
