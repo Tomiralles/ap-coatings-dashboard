@@ -126,7 +126,8 @@ interface OpcionesProcesado {
 // Nota: todos los alias @apcoatings.net comparten el buzón de tomiralles@.
 const REMITENTES_AUTOENVIO = [
   "abadpinturas@abadpinturas.com",   // legacy (en baja); recupera los perdidos
-  "administracion@apcoatings.net",   // nuevo origen de los autoenvíos SQL Pyme
+  "administracion@apcoatings.net",   // posible nuevo origen de SQL Pyme
+  "apcoatings@apcoatings.net",       // dirección "Enviar como" de la cuenta
 ];
 
 /**
@@ -345,7 +346,10 @@ async function procesarCuenta(
   const ventana = `newer_than:${opts.dias}d`;
   const qInbox = [ventana, opts.queryExtra].filter(Boolean).join(" ");
   const fromAutoenvio = REMITENTES_AUTOENVIO.map((e) => `from:${e}`).join(" OR ");
-  const qAutoenvio = `(${fromAutoenvio}) ${ventana}`;
+  // `in:anywhere` incluye Enviados, Archivados, Spam y Papelera: los
+  // autoenvíos de SQL Pyme salen DESDE la propia cuenta, así que están en
+  // ENVIADOS (no en Recibidos). Sin esto no se captarían.
+  const qAutoenvio = `(${fromAutoenvio}) ${ventana} in:anywhere`;
 
   const porId = new Map<string, gmail_v1.Schema$Message>();
   try {
