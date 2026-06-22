@@ -120,15 +120,18 @@ interface OpcionesProcesado {
   maxListar: number;
 }
 
-// Remitentes cuyos autoenvíos (pedidos de SQL Pyme) deben captarse AUNQUE
-// estén archivados / fuera de Recibidos. Un filtro de Gmail los saca del
-// INBOX al llegar, así que se buscan por remitente SIN el filtro labelIds.
-// Nota: todos los alias @apcoatings.net comparten el buzón de tomiralles@.
-const REMITENTES_AUTOENVIO = [
-  "abadpinturas@abadpinturas.com",   // legacy (en baja); recupera los perdidos
-  "administracion@apcoatings.net",   // posible nuevo origen de SQL Pyme
-  "apcoatings@apcoatings.net",       // dirección "Enviar como" de la cuenta
-];
+// Captación de los autoenvíos de SQL Pyme (pedidos).
+//
+// CLAVE: estos correos SALEN desde la propia cuenta — su From real es
+// tomiralles@apcoatings.net (verificado en cabeceras: From=tomiralles@,
+// To=administracion@apcoatings.net), por lo que quedan en ENVIADOS, no en
+// Recibidos. No se puede buscar por from:tomiralles@ (traería TODO el correo
+// enviado). El rasgo estable es el asunto "Pedido NN-NNN".
+//
+// Por eso se buscan por ASUNTO en todas las carpetas (in:anywhere incluye
+// Enviados/Archivados). Se añade el remitente legacy abadpinturas@ para
+// recuperar históricos archivados de antes del cambio de cuenta.
+const QUERY_AUTOENVIO = "(subject:pedido OR from:abadpinturas@abadpinturas.com)";
 
 /**
  * Lista mensajes de Gmail paginando hasta `maxListar`. Con `labelIds` filtra
@@ -345,11 +348,9 @@ async function procesarCuenta(
   //        archivado (no aparecen en Recibidos pero sí en una búsqueda).
   const ventana = `newer_than:${opts.dias}d`;
   const qInbox = [ventana, opts.queryExtra].filter(Boolean).join(" ");
-  const fromAutoenvio = REMITENTES_AUTOENVIO.map((e) => `from:${e}`).join(" OR ");
-  // `in:anywhere` incluye Enviados, Archivados, Spam y Papelera: los
-  // autoenvíos de SQL Pyme salen DESDE la propia cuenta, así que están en
-  // ENVIADOS (no en Recibidos). Sin esto no se captarían.
-  const qAutoenvio = `(${fromAutoenvio}) ${ventana} in:anywhere`;
+  // `in:anywhere` incluye Enviados/Archivados/Spam/Papelera: los autoenvíos de
+  // SQL Pyme salen DESDE la cuenta (están en Enviados, no en Recibidos).
+  const qAutoenvio = `${QUERY_AUTOENVIO} ${ventana} in:anywhere`;
 
   const porId = new Map<string, gmail_v1.Schema$Message>();
   try {
