@@ -98,6 +98,75 @@ function derivarEstadoTipo(tipoEnum: string | null): {
   }
 }
 
+interface RegistroDashboard {
+  id: string;
+  fecha: string;
+  quien: string;
+  asunto: string;
+  enlace: string;
+  cuerpo: string;
+  estado: string;
+  tipo: string;
+  prioridad: string;
+  autoDropdown: string;
+  respuestaAuto: string;
+  telefono: string;
+}
+
+// Estados que indican que un pedido ya está gestionado (fuera de pendientes).
+const ESTADOS_CERRADOS = new Set([
+  "enviado", "contabilizada", "respondida", "pagada", "completado",
+  "procesado", "revisada", "archivado",
+]);
+
+// Número de pedido de SQL Pyme: "26-219" (año-correlativo).
+const PATRON_NUM_PEDIDO = /\b(\d{2}-\d{3,5})\b/;
+// Prefijos de reenvío/respuesta a quitar del asunto mostrado.
+const PREFIJO_REENVIO = /^\s*((rv|re|fwd|fw)\s*:\s*)+/i;
+
+/**
+ * Colapsa los pedidos repetidos en un único registro por número de pedido.
+ *
+ * SQL Pyme autoenvía cada pedido y además se reenvía (RV:, RV: RV:) o se
+ * manda en días distintos, generando varios correos con el mismo número
+ * (p.ej. "26-219"). Dejamos uno por número: el más reciente (los registros
+ * llegan ordenados por fecha DESC), con el asunto sin prefijos de reenvío y
+ * heredando el estado "cerrado" si cualquiera de las copias ya fue gestionada.
+ * Los registros que no son pedidos pasan tal cual.
+ */
+function agruparPedidosPorNumero(
+  registros: RegistroDashboard[]
+): RegistroDashboard[] {
+  const indicePorNumero = new Map<string, number>();
+  const salida: RegistroDashboard[] = [];
+
+  for (const reg of registros) {
+    const esPedido = /pedido/i.test(reg.tipo) || /pedido/i.test(reg.asunto);
+    const m = esPedido ? reg.asunto.match(PATRON_NUM_PEDIDO) : null;
+    const numero = m ? m[1] : null;
+
+    if (!numero) {
+      salida.push(reg);
+      continue;
+    }
+
+    const idx = indicePorNumero.get(numero);
+    if (idx === undefined) {
+      indicePorNumero.set(numero, salida.length);
+      salida.push({ ...reg, asunto: reg.asunto.replace(PREFIJO_REENVIO, "") });
+    } else {
+      // Copia adicional del mismo pedido: si está gestionada y el
+      // representante no, heredamos su estado (el pedido ya se cerró).
+      const repr = salida[idx];
+      const estaCerrada = ESTADOS_CERRADOS.has((reg.estado || "").toLowerCase());
+      const reprCerrado = ESTADOS_CERRADOS.has((repr.estado || "").toLowerCase());
+      if (estaCerrada && !reprCerrado) repr.estado = reg.estado;
+    }
+  }
+
+  return salida;
+}
+
 export async function GET() {
   try {
     // Recuperamos todos los emails reconstruyendo el formato del Sheet.
@@ -141,7 +210,7 @@ export async function GET() {
       ORDER BY recibido_en DESC NULLS LAST
     `) as unknown as FilaPostgres[];
 
-    const registros = rows.map((r) => {
+    const registros: RegistroDashboard[] = rows.map((r) => {
       // Reconstruir el campo "quien" con el formato original
       let quien = r.remitente_nombre || "";
       if (r.remitente_email && !r.remitente_email.includes("desconocido.local")) {
@@ -187,10 +256,14 @@ export async function GET() {
       };
     });
 
+    // Colapsar pedidos repetidos (original + reenvíos / mismo nº en días
+    // distintos) en un único registro por número de pedido.
+    const registrosAgrupados = agruparPedidosPorNumero(registros);
+
     return NextResponse.json({
-      registros,
+      registros: registrosAgrupados,
       fuente: "postgres",
-      total: registros.length,
+      total: registrosAgrupados.length,
     });
   } catch (err) {
     return NextResponse.json(
