@@ -82,12 +82,43 @@ export const maxDuration = 60;
 const CUENTAS_A_PROCESAR = CUENTAS_VIGILADAS;
 
 /**
- * Número máximo de mensajes a inspeccionar por cuenta en cada ciclo.
- * Bajamos a 3 para que la latencia máxima por cuenta sea
- * ~3 × 5.5s = 16s, dejando margen dentro del timeout de cron-job.org
- * (30s en plan free) y del maxDuration de Vercel (60s).
+ * Captación robusta (anti-"correo enterrado").
+ *
+ * ANTES: solo se inspeccionaban los 3 mensajes MÁS recientes del INBOX por
+ * ciclo. Si entre dos ejecuciones del cron entraban >3 correos, los del
+ * medio nunca llegaban a estar en ese top-3 y NUNCA se clasificaban
+ * (se perdían para siempre). Eso enterró los pedidos autoenviados por SQL
+ * Pyme a partir del 10-jun-2026.
+ *
+ * AHORA: listamos una VENTANA amplia del INBOX (con paginación) y procesamos
+ * todos los que aún no estén en `clasificaciones_agente`, limitando solo el
+ * número de CLASIFICACIONES nuevas por ejecución (no el de mensajes mirados).
+ * Como el listado es amplio, ningún correo queda fuera: lo que no entra en
+ * este ciclo entra en el siguiente. El tope por ciclo respeta el maxDuration.
  */
-const MAX_MENSAJES_POR_CUENTA = 3;
+
+// Ventana de días hacia atrás que se inspecciona por defecto (Gmail `q`).
+const VENTANA_DIAS_DEFECTO = 30;
+
+// Tope de mensajes a LISTAR por cuenta (con paginación). Mirarlos es barato
+// (una query para saber cuáles ya existen); solo clasificamos los nuevos.
+const MAX_MENSAJES_LISTAR = 250;
+
+// Tope de CLASIFICACIONES nuevas (llamadas al modelo) por ejecución y cuenta.
+// Cada clasificación tarda ~5-6s; 8 × 6s ≈ 48s deja margen bajo maxDuration=60.
+const MAX_CLASIFICACIONES_POR_CICLO_DEFECTO = 8;
+
+interface OpcionesProcesado {
+  // Filtro de Gmail (p.ej. "from:abadpinturas@abadpinturas.com") para un
+  // backfill dirigido. Se combina con la ventana de días.
+  queryExtra?: string;
+  // Días hacia atrás a inspeccionar.
+  dias: number;
+  // Máximo de clasificaciones nuevas por ejecución y cuenta.
+  maxClasificaciones: number;
+  // Máximo de mensajes a listar.
+  maxListar: number;
+}
 
 interface ResultadoPorCuenta {
   cuenta: string;
@@ -241,7 +272,8 @@ function verificarCronSecret(req: NextRequest): boolean {
  */
 async function procesarCuenta(
   cuenta: string,
-  configAutoReply: AgentAutoReplyConfig
+  configAutoReply: AgentAutoReplyConfig,
+  opts: OpcionesProcesado
 ): Promise<ResultadoPorCuenta> {
   const res: ResultadoPorCuenta = {
     cuenta,
@@ -270,14 +302,25 @@ async function procesarCuenta(
     return res;
   }
 
-  // 1. Listar los últimos N mensajes del INBOX
-  let listResp;
+  // 1. Listar una ventana amplia del INBOX (con paginación), no solo el top-N.
+  const queryGmail = [`newer_than:${opts.dias}d`, opts.queryExtra]
+    .filter(Boolean)
+    .join(" ");
+
+  const mensajes: gmail_v1.Schema$Message[] = [];
   try {
-    listResp = await gmail.users.messages.list({
-      userId: "me",
-      labelIds: ["INBOX"],
-      maxResults: MAX_MENSAJES_POR_CUENTA,
-    });
+    let pageToken: string | undefined = undefined;
+    do {
+      const listResp = (await gmail.users.messages.list({
+        userId: "me",
+        labelIds: ["INBOX"],
+        q: queryGmail,
+        maxResults: 100,
+        pageToken,
+      })) as unknown as { data: gmail_v1.Schema$ListMessagesResponse };
+      for (const m of listResp.data.messages ?? []) mensajes.push(m);
+      pageToken = listResp.data.nextPageToken ?? undefined;
+    } while (pageToken && mensajes.length < opts.maxListar);
   } catch (err) {
     res.errores++;
     res.detalles.push({
@@ -288,28 +331,40 @@ async function procesarCuenta(
     return res;
   }
 
-  const mensajes = listResp.data.messages ?? [];
   res.inspeccionados = mensajes.length;
 
-  // 2. Para cada mensaje, comprobar si ya está en BD; si no, clasificar
-  // (secuencial DENTRO de la cuenta para no martillear Anthropic API)
+  // Prefetch: una sola query para saber cuáles ya están clasificados.
+  // Evita un SELECT por mensaje (N+1) dentro del bucle.
+  const idsListados = mensajes
+    .map((m) => m.id)
+    .filter((id): id is string => Boolean(id));
+  const yaClasificados = new Set<string>();
+  if (idsListados.length > 0) {
+    const existentes = await sql`
+      SELECT gmail_message_id FROM clasificaciones_agente
+      WHERE gmail_message_id = ANY(${idsListados})
+    `;
+    for (const row of existentes) {
+      yaClasificados.add(row.gmail_message_id as string);
+    }
+  }
+
+  // 2. Saltar los ya clasificados; clasificar los nuevos hasta el tope del
+  // ciclo (secuencial para no martillear el modelo). Lo que no entre en este
+  // ciclo se procesa en el siguiente: el listado es amplio, no se pierde nada.
+  let clasificadasEsteCiclo = 0;
   for (const m of mensajes) {
     if (!m.id) continue;
 
-    // Comprobar duplicado por gmail_message_id
-    const yaExiste = await sql`
-      SELECT 1 FROM clasificaciones_agente
-      WHERE gmail_message_id = ${m.id}
-      LIMIT 1
-    `;
-    if (yaExiste.length > 0) {
+    // Duplicado: ya estaba en BD (Set precargado, sin query extra)
+    if (yaClasificados.has(m.id)) {
       res.saltados++;
-      res.detalles.push({
-        gmail_message_id: m.id,
-        accion: "saltado_ya_existe",
-      });
       continue;
     }
+
+    // Tope por ciclo alcanzado → paramos (el resto se coge en el próximo ciclo)
+    if (clasificadasEsteCiclo >= opts.maxClasificaciones) break;
+    clasificadasEsteCiclo++;
 
     // Obtener mensaje completo
     let msgResp;
@@ -660,6 +715,38 @@ export async function GET(req: NextRequest) {
 
   const t0 = Date.now();
 
+  // Parámetros opcionales (backfill manual y ajuste fino):
+  //   ?dias=30      ventana de días del INBOX a inspeccionar
+  //   ?max=8        máximo de clasificaciones nuevas por ciclo y cuenta
+  //   ?listar=250   tope de mensajes a listar
+  //   ?q=from:...   filtro extra de Gmail (backfill dirigido)
+  const { searchParams } = new URL(req.url);
+  const parseNum = (
+    v: string | null,
+    def: number,
+    min: number,
+    max: number
+  ): number => {
+    const n = v == null ? NaN : parseInt(v, 10);
+    return Number.isFinite(n) ? Math.min(Math.max(n, min), max) : def;
+  };
+  const opts: OpcionesProcesado = {
+    dias: parseNum(searchParams.get("dias"), VENTANA_DIAS_DEFECTO, 1, 90),
+    maxClasificaciones: parseNum(
+      searchParams.get("max"),
+      MAX_CLASIFICACIONES_POR_CICLO_DEFECTO,
+      1,
+      20
+    ),
+    maxListar: parseNum(
+      searchParams.get("listar"),
+      MAX_MENSAJES_LISTAR,
+      10,
+      500
+    ),
+    queryExtra: searchParams.get("q")?.trim() || undefined,
+  };
+
   // Leemos la config del toggle auto-respuesta UNA VEZ por invocación
   // (no por cuenta y desde luego no por email — evitamos N+1 queries).
   const configAutoReply = await leerConfigAutoReply();
@@ -671,7 +758,7 @@ export async function GET(req: NextRequest) {
   // secuencial DENTRO de una cuenta para no martillear la API.
   const porCuenta: ResultadoPorCuenta[] = await Promise.all(
     CUENTAS_A_PROCESAR.map((cuenta) =>
-      procesarCuenta(cuenta, configAutoReply)
+      procesarCuenta(cuenta, configAutoReply, opts)
     )
   );
 
@@ -695,7 +782,7 @@ export async function GET(req: NextRequest) {
       })}::jsonb,
       'cron'
     )
-  `.catch((err) => {
+  `.catch((err: unknown) => {
     console.error("[procesar-pendientes] No se pudo registrar evento:", err);
   });
 
